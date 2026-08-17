@@ -410,31 +410,30 @@ fn draw_rollup(cols: u16, y: u16, h: u16, rows: &[rollup::Row]) {
 
 fn draw_help(cols: u16, rows: u16) {
     let lines = [
-        "",
-        "  TAB        switch sessions / inbox",
-        "  ↑ ↓        select",
-        "  Enter      session: jump to its workspace",
-        "  m          session: send a message on the bus",
-        "  c          today's token rollup (Esc back)",
-        "  o / Enter  inbox: open the item",
-        "  D          inbox: delete the item (y/n)",
-        "  ?          this help (any key closes)",
-        "  q          quit",
-        "",
+        " TAB        switch sessions / inbox",
+        " ↑ ↓        select",
+        " Enter      session: jump to its workspace",
+        " m          session: send a message on the bus",
+        " c          today's token rollup (Esc back)",
+        " o / Enter  inbox: open the item",
+        " D          inbox: delete the item (y/n)",
+        " ?          this help (any key closes)",
+        " q          quit",
     ];
     let w: u16 = 46;
-    let h = lines.len() as u16;
+    let inner = (w - 2) as usize;
+    let h = lines.len() as u16 + 2;
     let x = (cols.saturating_sub(w)) / 2 + 1;
     let y = (rows.saturating_sub(h)) / 2 + 1;
     let mut pane = Pane::new(x, y, w, h, 231, 236);
-    let mut out = String::new();
+    let mut out = format!("┌{}┐\n", "─".repeat(inner));
     for l in lines {
         let mut s = l.to_string();
-        pad(&mut s, w as usize);
-        out.push_str(&s);
-        out.push('\n');
+        pad(&mut s, inner);
+        out.push_str(&format!("│{}│\n", s));
     }
-    pane.set_text(out.trim_end_matches('\n'));
+    out.push_str(&format!("└{}┘", "─".repeat(inner)));
+    pane.set_text(&out);
     pane.refresh();
 }
 
@@ -480,7 +479,9 @@ fn visible_len(s: &str) -> usize {
             }
             i += 1;
         } else {
-            n += 1;
+            if b[i] & 0xC0 != 0x80 {
+                n += 1; // count code points, not bytes (arrows, box chars)
+            }
             i += 1;
         }
     }
