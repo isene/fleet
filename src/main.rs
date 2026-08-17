@@ -399,17 +399,22 @@ fn draw_rollup(cols: u16, y: u16, h: u16, rows: &[rollup::Row]) {
 
 /// Bordered, blocking help viewer (crust Popup): ESC / q / ENTER closes.
 fn help() {
-    let text = "\
- TAB        switch sessions / inbox
- ↑ ↓        select
- Enter      session: jump to its workspace
- m          session: send a message on the bus
- c          today's token rollup (Esc back)
- o / Enter  inbox: open the item
- D          inbox: delete the item (y/n)
- ?          this help (Esc / q / Enter closes)
- q          quit";
-    Popup::centered(48, 11, 231, 236).view(text);
+    let hdr = |s: &str| style::styled(s, Some(208), None, "b");
+    let key = |s: &str| style::styled(&format!("  {:<10}", s), Some(46), None, "");
+    let mut t = String::new();
+    t.push_str(&format!(" {}\n", hdr("SESSIONS")));
+    t.push_str(&format!("{}jump to its workspace\n", key("Enter")));
+    t.push_str(&format!("{}send a message on the bus\n", key("m")));
+    t.push_str(&format!(" {}\n", hdr("INBOX")));
+    t.push_str(&format!("{}open the item\n", key("o / Enter")));
+    t.push_str(&format!("{}delete the item (y/n)\n", key("D")));
+    t.push_str(&format!(" {}\n", hdr("GLOBAL")));
+    t.push_str(&format!("{}switch sessions / inbox\n", key("TAB")));
+    t.push_str(&format!("{}select\n", key("↑ ↓")));
+    t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
+    t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
+    t.push_str(&format!("{}quit", key("q")));
+    Popup::centered(50, 13, 231, 236).view(&t);
 }
 
 #[allow(clippy::too_many_arguments)]
