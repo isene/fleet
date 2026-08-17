@@ -51,6 +51,7 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
 - `D` on an inbox item: delete it (asks y/n)
+- `?` popup help with all keys
 - `q` quit
 
 `fleet --list` prints sessions and inbox as plain text; `fleet --today`
