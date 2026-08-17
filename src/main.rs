@@ -17,7 +17,7 @@ mod winmap;
 
 use config::Config;
 use crust::style;
-use crust::{Crust, Input, Pane};
+use crust::{Crust, Input, Pane, Popup};
 use sessions::{Cache, Session, State};
 use std::process::{Command, Stdio};
 use winmap::WinMap;
@@ -130,7 +130,6 @@ fn main() {
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
     let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
     let mut msg_buf = String::new();
-    let mut show_help = false;
 
     loop {
         let map = wm.as_ref().map(|w| w.refresh()).unwrap_or_default();
@@ -156,20 +155,10 @@ fn main() {
         }
         draw_footer(cols, rows, focus, &pending_del, &flash,
                     rollup_rows.is_some(), &msg_to, &msg_buf);
-        if show_help {
-            draw_help(cols, rows);
-        }
 
         let key = Input::getchr(Some(2));
         let k = key.as_deref();
         flash.clear();
-
-        if show_help {
-            if k.is_some() {
-                show_help = false;
-            }
-            continue;
-        }
 
         // Message-input mode captures every keystroke until Enter or Esc.
         if let Some((addr, tag)) = msg_to.clone() {
@@ -275,7 +264,7 @@ fn main() {
             Some("c") => {
                 rollup_rows = Some(rollup::today(&sessions::load_tags()));
             }
-            Some("?") | Some("h") => show_help = true,
+            Some("?") | Some("h") => help(),
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
                 cols = c;
@@ -408,33 +397,19 @@ fn draw_rollup(cols: u16, y: u16, h: u16, rows: &[rollup::Row]) {
     pane.refresh();
 }
 
-fn draw_help(cols: u16, rows: u16) {
-    let lines = [
-        " TAB        switch sessions / inbox",
-        " ↑ ↓        select",
-        " Enter      session: jump to its workspace",
-        " m          session: send a message on the bus",
-        " c          today's token rollup (Esc back)",
-        " o / Enter  inbox: open the item",
-        " D          inbox: delete the item (y/n)",
-        " ?          this help (any key closes)",
-        " q          quit",
-    ];
-    let w: u16 = 46;
-    let inner = (w - 2) as usize;
-    let h = lines.len() as u16 + 2;
-    let x = (cols.saturating_sub(w)) / 2 + 1;
-    let y = (rows.saturating_sub(h)) / 2 + 1;
-    let mut pane = Pane::new(x, y, w, h, 231, 236);
-    let mut out = format!("┌{}┐\n", "─".repeat(inner));
-    for l in lines {
-        let mut s = l.to_string();
-        pad(&mut s, inner);
-        out.push_str(&format!("│{}│\n", s));
-    }
-    out.push_str(&format!("└{}┘", "─".repeat(inner)));
-    pane.set_text(&out);
-    pane.refresh();
+/// Bordered, blocking help viewer (crust Popup): ESC / q / ENTER closes.
+fn help() {
+    let text = "\
+ TAB        switch sessions / inbox
+ ↑ ↓        select
+ Enter      session: jump to its workspace
+ m          session: send a message on the bus
+ c          today's token rollup (Esc back)
+ o / Enter  inbox: open the item
+ D          inbox: delete the item (y/n)
+ ?          this help (Esc / q / Enter closes)
+ q          quit";
+    Popup::centered(48, 11, 231, 236).view(text);
 }
 
 #[allow(clippy::too_many_arguments)]
