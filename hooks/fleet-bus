@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""fleet message bus, receiving side.
+
+UserPromptSubmit hook: pending messages for this session are injected as
+additional context on the user's next prompt, then consumed.
+
+Addressing: a message to session X is a file in ~/.fleet/bus/<addr>/
+where <addr> is X's CC-sessions bookmark tag, or its raw session id.
+Anyone can send: fleet's `m` key does, and any Claude session can just
+write a file there. Files are read oldest-first and deleted.
+
+Cost when idle: one stat of ~/.fleet/bus (usually ENOENT) and exit.
+Fails open: a broken bus must never block a prompt.
+"""
+import json
+import os
+import sys
+
+BUS = os.path.expanduser("~/.fleet/bus")
+BOOKMARKS = os.path.expanduser("~/.cc-sessions/bookmarks.json")
+
+
+def addrs(session_id):
+    out = {session_id}
+    try:
+        with open(BOOKMARKS, encoding="utf-8") as fh:
+            data = json.load(fh)
+        for sid, entry in data.get("sessions", {}).items():
+            if sid == session_id:
+                out.update(entry.get("tags", []))
+    except Exception:
+        pass
+    return out
+
+
+def main():
+    if not os.path.isdir(BUS):
+        return
+    data = json.load(sys.stdin)
+    sid = data.get("session_id") or ""
+    msgs = []
+    for addr in sorted(addrs(sid)):
+        d = os.path.join(BUS, addr)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            path = os.path.join(d, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read().strip()
+                os.unlink(path)
+            except OSError:
+                continue
+            if text:
+                msgs.append(text)
+    if not msgs:
+        return
+    ctx = ("Messages delivered via the fleet bus (from other local "
+           "sessions or the fleet TUI):\n"
+           + "\n".join(f"- {m}" for m in msgs))
+    json.dump({"hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": ctx}}, sys.stdout)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        pass

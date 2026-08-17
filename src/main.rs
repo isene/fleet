@@ -11,6 +11,7 @@
 
 mod config;
 mod inbox;
+mod rollup;
 mod sessions;
 mod winmap;
 
@@ -65,9 +66,10 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("fleet — Claude Code mission control (Fe2O3 suite)");
         println!();
-        println!("Usage: fleet [--list]");
+        println!("Usage: fleet [--list | --today]");
         println!();
-        println!("  --list    print sessions and inbox as text and exit");
+        println!("  --list     print sessions and inbox as text and exit");
+        println!("  --today    print today's token rollup per session and exit");
         println!();
         println!("Sessions with state (working / YOURS / idle / off), workspace and");
         println!("context size, plus the inbox folders where handoffs land.");
@@ -81,6 +83,19 @@ fn main() {
 
     let cfg = Config::load();
     let mut cache = Cache::new();
+
+    if std::env::args().skip(1).any(|a| a == "--today") {
+        let rows = rollup::today(&sessions::load_tags());
+        let (mut out, mut inp) = (0u64, 0u64);
+        for r in &rows {
+            println!("{:<12} {:>7}k out  {:>6}k in  {:>4} turns",
+                     r.tag, r.out_tokens / 1000, r.in_tokens / 1000, r.turns);
+            out += r.out_tokens;
+            inp += r.in_tokens;
+        }
+        println!("{:<12} {:>7}k out  {:>6}k in", "TOTAL", out / 1000, inp / 1000);
+        return;
+    }
 
     if std::env::args().skip(1).any(|a| a == "--list") {
         let wm = WinMap::connect();
@@ -112,6 +127,9 @@ fn main() {
     let mut sel_i = 0usize;
     let mut pending_del: Option<std::path::PathBuf> = None;
     let mut flash = String::new();
+    let mut rollup_rows: Option<Vec<rollup::Row>> = None;
+    let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
+    let mut msg_buf = String::new();
 
     loop {
         let map = wm.as_ref().map(|w| w.refresh()).unwrap_or_default();
@@ -128,14 +146,53 @@ fn main() {
         let sess_h = body.saturating_sub(inbox_h);
 
         draw_header(cols, &sess, &items);
-        draw_sessions(cols, 2, sess_h as u16, &sess, focus == Focus::Sessions, sel_s);
-        draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
-                   focus == Focus::Inbox, sel_i);
-        draw_footer(cols, rows, focus, &pending_del, &flash);
+        if let Some(rows_r) = &rollup_rows {
+            draw_rollup(cols, 2, body as u16, rows_r);
+        } else {
+            draw_sessions(cols, 2, sess_h as u16, &sess, focus == Focus::Sessions, sel_s);
+            draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
+                       focus == Focus::Inbox, sel_i);
+        }
+        draw_footer(cols, rows, focus, &pending_del, &flash,
+                    rollup_rows.is_some(), &msg_to, &msg_buf);
 
         let key = Input::getchr(Some(2));
         let k = key.as_deref();
         flash.clear();
+
+        // Message-input mode captures every keystroke until Enter or Esc.
+        if let Some((addr, tag)) = msg_to.clone() {
+            match k {
+                Some("ENTER") => {
+                    if !msg_buf.trim().is_empty() {
+                        flash = match send_msg(&addr, msg_buf.trim()) {
+                            Ok(()) => format!("sent to {}", tag),
+                            Err(e) => format!("send failed: {}", e),
+                        };
+                    }
+                    msg_to = None;
+                    msg_buf.clear();
+                }
+                Some("ESC") => {
+                    msg_to = None;
+                    msg_buf.clear();
+                }
+                Some("BACKSPACE") => {
+                    msg_buf.pop();
+                }
+                Some(s) if s.chars().count() == 1 => msg_buf.push_str(s),
+                _ => {}
+            }
+            continue;
+        }
+
+        if rollup_rows.is_some() {
+            match k {
+                Some("ESC") | Some("c") | Some("q") | Some("Q") => rollup_rows = None,
+                _ => {}
+            }
+            continue;
+        }
 
         if let Some(path) = pending_del.take() {
             if k == Some("y") || k == Some("Y") {
@@ -174,8 +231,7 @@ fn main() {
                 Focus::Sessions => {
                     if let Some(s) = sess.get(sel_s) {
                         flash = match s.ws {
-                            Some(w) => format!("{} is on workspace {} (Mod4+{})",
-                                               s.tag, w + 1, w + 1),
+                            Some(w) => jump(&s.tag, w),
                             None => format!("{} has no window here", s.tag),
                         };
                     }
@@ -195,6 +251,18 @@ fn main() {
                 if let Some(i) = items.get(sel_i) {
                     pending_del = Some(i.path.clone());
                 }
+            }
+            Some("m") if focus == Focus::Sessions => {
+                if let Some(s) = sess.get(sel_s) {
+                    // A bookmark tag is the stable address (it follows the
+                    // session across id changes); a raw id is the fallback.
+                    let addr = if s.tagged { s.tag.clone() } else { s.id.clone() };
+                    msg_to = Some((addr, s.tag.clone()));
+                    msg_buf.clear();
+                }
+            }
+            Some("c") => {
+                rollup_rows = Some(rollup::today(&sessions::load_tags()));
             }
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
@@ -281,18 +349,71 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item], focused: bool, s
     pane.refresh();
 }
 
+/// Switch to the session's workspace by injecting tile's own hotkey
+/// (frame supports XTEST). Falls back to naming the workspace.
+fn jump(tag: &str, ws: u32) -> String {
+    let key = format!("super+{}", ws + 1);
+    match Command::new("xdotool")
+        .args(["key", &key])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(st) if st.success() => format!("→ {} on ws {}", tag, ws + 1),
+        _ => format!("{} is on workspace {} (Mod4+{})", tag, ws + 1, ws + 1),
+    }
+}
+
+fn send_msg(addr: &str, text: &str) -> std::io::Result<()> {
+    let dir = config::home().join(".fleet/bus").join(addr);
+    std::fs::create_dir_all(&dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    std::fs::write(dir.join(format!("{}-fleet.msg", ts)), format!("{}\n", text))
+}
+
+fn draw_rollup(cols: u16, y: u16, h: u16, rows: &[rollup::Row]) {
+    let mut pane = Pane::new(1, y, cols, h, 231, 0);
+    let hdr = format!(" {:<12}  {:>9}  {:>9}  {:>6}", "TODAY", "OUT", "IN", "TURNS");
+    let mut out = format!("{}\n", style::styled(&hdr, Some(250), None, "b"));
+    let (mut o, mut i) = (0u64, 0u64);
+    for r in rows {
+        o += r.out_tokens;
+        i += r.in_tokens;
+    }
+    for r in rows.iter().take((h as usize).saturating_sub(3)) {
+        out.push_str(&format!(
+            " {:<12}  {:>8}k  {:>8}k  {:>6}\n",
+            clip(&r.tag, 12), r.out_tokens / 1000, r.in_tokens / 1000, r.turns
+        ));
+    }
+    out.push_str(&style::styled(
+        &format!(" {:<12}  {:>8}k  {:>8}k", "TOTAL", o / 1000, i / 1000),
+        Some(250), None, "b"));
+    pane.set_text(&out);
+    pane.refresh();
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_footer(cols: u16, rows: u16, focus: Focus, pending: &Option<std::path::PathBuf>,
-               flash: &str) {
+               flash: &str, in_rollup: bool, msg_to: &Option<(String, String)>,
+               msg_buf: &str) {
     let mut pane = Pane::new(1, rows, cols, 1, 244, 236);
-    let left = if let Some(p) = pending {
+    let left = if let Some((_, tag)) = msg_to {
+        format!(" msg → {}: {}_  (Enter send · Esc cancel)", tag, msg_buf)
+    } else if let Some(p) = pending {
         style::styled(
             &format!(" delete {}?  y / n", p.file_name().unwrap_or_default().to_string_lossy()),
             Some(208), None, "b")
     } else if !flash.is_empty() {
         style::fg(flash, 46)
+    } else if in_rollup {
+        " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter where".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump · m message · c today".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · D delete".to_string(),
         }
     };

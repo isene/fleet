@@ -46,6 +46,7 @@ pub struct Session {
     pub tag: String,
     pub cwd: String,
     pub state: State,
+    pub tagged: bool, // tag comes from a CC-sessions bookmark
     pub age_secs: u64,
     pub model: String,
     pub prompt: String,
@@ -120,6 +121,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             } else {
                 State::Working
             };
+            let tagged = tags.contains_key(&id);
             let tag = tags.get(&id).cloned().unwrap_or_else(|| {
                 Path::new(&info.cwd)
                     .file_name()
@@ -129,6 +131,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             out.push(Session {
                 id,
                 tag,
+                tagged,
                 cwd: info.cwd.clone(),
                 state,
                 age_secs: age,
@@ -307,7 +310,7 @@ fn ppid(pid: u32) -> Option<u32> {
     None
 }
 
-fn load_tags() -> HashMap<String, String> {
+pub fn load_tags() -> HashMap<String, String> {
     let mut out = HashMap::new();
     let path = home().join(".cc-sessions/bookmarks.json");
     let text = match std::fs::read_to_string(path) {

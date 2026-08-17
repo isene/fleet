@@ -45,12 +45,39 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 
 - `TAB` switch between sessions and inbox
 - `↑` / `↓` select
-- `Enter` on a session: show which workspace it is on
+- `Enter` on a session: jump to its workspace (xdotool key injection;
+  falls back to naming the workspace when unavailable)
+- `m` on a session: type a message, Enter drops it on the bus
+- `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
 - `D` on an inbox item: delete it (asks y/n)
 - `q` quit
 
-`fleet --list` prints the same information as plain text and exits.
+`fleet --list` prints sessions and inbox as plain text; `fleet --today`
+prints the rollup. Both exit immediately.
+
+## Message bus
+
+A message to a session is a file. `~/.fleet/bus/<addr>/` is the
+mailbox, where `<addr>` is the session's CC-sessions bookmark tag (or
+its raw session id). fleet's `m` key writes there; so can any Claude
+session, which makes the path convention the whole API.
+
+Delivery: the `hooks/fleet-bus` UserPromptSubmit hook injects pending
+messages as context on the receiving session's next user prompt, then
+deletes them. Install:
+
+```sh
+ln -s "$PWD/hooks/fleet-bus" ~/.claude/hooks/fleet-bus
+```
+
+and add it to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
+
+```json
+{ "type": "command", "command": "~/.claude/hooks/fleet-bus" }
+```
+
+When idle the hook is one stat of a usually absent directory.
 
 ## Configuration
 
@@ -74,13 +101,8 @@ home directory, phone items in `~/.transfer`.
 A 2 second tick while open, nothing after `q`. Each tick is one `stat`
 per session file (transcript tails are re-read only when mtime
 changed), one `readdir` per inbox folder, and one `/proc` sweep for
-claude pids.
-
-## Roadmap
-
-- A drop-folder message bus between sessions
-- Jump straight to a session's window
-- Cost and token rollup per session per day
+claude pids. The token rollup reads whole transcripts, so it runs only
+on demand (`c` or `--today`), never on the tick.
 
 ## License
 
