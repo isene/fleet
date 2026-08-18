@@ -48,6 +48,7 @@ fn state_color(s: State) -> u8 {
         State::Yours => 208,
         State::Idle => 244,
         State::Off => 238,
+        State::Older => 60,
     }
 }
 
@@ -165,7 +166,8 @@ fn main() {
         marked.retain(|p| items.iter().any(|i| &i.path == p));
         // A flagged session that comes alive again is unflagged.
         marked_s.retain(|p| sess.iter().any(|s| {
-            &s.path == p && matches!(s.state, State::Idle | State::Off)
+            &s.path == p
+                && matches!(s.state, State::Idle | State::Off | State::Older)
         }));
         sel_s = sel_s.min(sess.len().saturating_sub(1));
         sel_i = sel_i.min(items.len().saturating_sub(1));
@@ -292,7 +294,7 @@ fn main() {
             }
             Some("d") if focus == Focus::Sessions => {
                 if let Some(s) = sess.get(sel_s) {
-                    if matches!(s.state, State::Idle | State::Off) {
+                    if matches!(s.state, State::Idle | State::Off | State::Older) {
                         if let Some(pos) = marked_s.iter().position(|p| p == &s.path) {
                             marked_s.remove(pos);
                         } else {

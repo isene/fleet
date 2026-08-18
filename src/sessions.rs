@@ -19,6 +19,7 @@ pub enum State {
     Yours,   // the answer is in; waiting for the user
     Idle,    // alive but nothing has happened for idle_mins
     Off,     // no claude process runs this session
+    Older,   // bookmarked but beyond the recent window: curated history
 }
 
 impl State {
@@ -28,6 +29,7 @@ impl State {
             State::Yours => "YOURS",
             State::Idle => "idle",
             State::Off => "off",
+            State::Older => "older",
         }
     }
     fn rank(self) -> u8 {
@@ -36,6 +38,7 @@ impl State {
             State::Working => 1,
             State::Idle => 2,
             State::Off => 3,
+            State::Older => 4,
         }
     }
 }
@@ -105,16 +108,22 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 .duration_since(mtime)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if age > cfg.recent_days * 86400 {
-                continue;
-            }
             let id = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
+            // Beyond the recent window only BOOKMARKED sessions stay,
+            // listed as "older": the curated list without the uncurated
+            // old strays.
+            let recent = age <= cfg.recent_days * 86400;
+            if !recent && !tags.contains_key(&id) {
+                continue;
+            }
             let info = cached_tail(cache, &path, mtime);
             let pid = procs.get(&id).copied();
-            let state = if pid.is_none() {
+            let state = if !recent {
+                State::Older
+            } else if pid.is_none() {
                 State::Off
             } else if age > cfg.idle_mins * 60 {
                 State::Idle
@@ -249,7 +258,7 @@ fn user_text(content: &Value) -> Option<String> {
     // Hook feedback and interrupts are typed as user entries but are not
     // the user's prompt; skip them so an earlier real prompt surfaces.
     for noise in ["Stop hook feedback:", "[Request interrupted", "Caveat:",
-                  "Base directory for this skill:"] {
+                  "Base directory for this skill:", "# "] {
         if clean.starts_with(noise) {
             return None;
         }

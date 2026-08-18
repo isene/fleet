@@ -30,6 +30,8 @@ that at a glance, in one TUI.
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt
 - Sorted so YOURS floats to the top
+- Bookmarked sessions older than the recent window stay listed at the
+  bottom as `older` (dim); unbookmarked old ones are dropped
 
 **Inbox** (configurable watch folders):
 
