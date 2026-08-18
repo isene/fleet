@@ -9,8 +9,11 @@ secret URL path) and exposes two tools:
   check_messages()            read and consume messages addressed to the
                               phone
 
-Transport: the bus folder (~/.transfer/fleet-bus/) is inside a Syncthing
-folder shared with the laptop, so a written file lands there in seconds.
+Transport: ~/fleet-relay/ is a small dedicated Syncthing folder shared
+with the laptop (as ~/.fleet/relay), so a written file lands in seconds.
+The user's other synced folders stay receive-encrypted on this host;
+only bus messages, which pass through this server in plaintext anyway,
+live here unencrypted.
 On the laptop the fleet-bus UserPromptSubmit hook injects it into the
 target session on its next user prompt. Replies travel the same road in
 reverse: sessions write to fleet-bus/phone/, this server serves them.
@@ -27,7 +30,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-BUS = Path.home() / ".transfer" / "fleet-bus"
+BUS = Path.home() / "fleet-relay"
 BIND = ("127.0.0.1", 8765)
 MAX_TEXT = 4000
 PROTOCOL = "2025-03-26"
