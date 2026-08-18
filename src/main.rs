@@ -504,15 +504,33 @@ fn jump(tag: &str, ws: u32) -> String {
     }
 }
 
+/// PATH lookup: glass's -e does a raw execve, no PATH search, and a
+/// failed exec silently falls back to bare. Hand it absolute paths.
+fn which(cmd: &str) -> Option<String> {
+    for dir in std::env::var("PATH").ok()?.split(':') {
+        let p = std::path::Path::new(dir).join(cmd);
+        if p.is_file() {
+            return Some(p.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
 /// A session with no window on this display: resume it in a fresh glass.
-/// Tagged sessions go through `cc <tag>` (path + auto-follow); untagged
-/// ones get a plain resume in their own working directory.
+/// Tagged sessions go through `c <tag>` (CC-sessions: path + auto-follow);
+/// untagged ones get a plain resume in their own working directory.
 fn resurrect(s: &Session) -> String {
     let mut c = Command::new("glass");
     if s.tagged {
-        c.args(["-e", "cc", &s.tag]);
+        let Some(bin) = which("c") else {
+            return "session resumer 'c' not in PATH".into();
+        };
+        c.args(["-e", &bin, &s.tag]);
     } else {
-        c.args(["-e", "claude", "--resume", &s.id]);
+        let Some(bin) = which("claude") else {
+            return "'claude' not in PATH".into();
+        };
+        c.args(["-e", &bin, "--resume", &s.id]);
         if !s.cwd.is_empty() {
             c.current_dir(&s.cwd);
         }
