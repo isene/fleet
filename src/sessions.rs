@@ -258,7 +258,8 @@ fn user_text(content: &Value) -> Option<String> {
     // Hook feedback and interrupts are typed as user entries but are not
     // the user's prompt; skip them so an earlier real prompt surfaces.
     for noise in ["Stop hook feedback:", "[Request interrupted", "Caveat:",
-                  "Base directory for this skill:", "# "] {
+                  "Base directory for this skill:", "# ",
+                  "This session is being continued from"] {
         if clean.starts_with(noise) {
             return None;
         }
