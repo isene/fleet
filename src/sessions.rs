@@ -45,6 +45,8 @@ pub struct Session {
     pub id: String,
     pub tag: String,
     pub cwd: String,
+    pub path: PathBuf, // the transcript .jsonl
+
     pub state: State,
     pub tagged: bool, // tag comes from a CC-sessions bookmark
     pub age_secs: u64,
@@ -132,6 +134,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 id,
                 tag,
                 tagged,
+                path: path.clone(),
                 cwd: info.cwd.clone(),
                 state,
                 age_secs: age,
@@ -243,7 +246,7 @@ fn user_text(content: &Value) -> Option<String> {
     if clean.starts_with('<') {
         return None; // system-reminder / command wrapper, not the user
     }
-    Some(clean.chars().take(80).collect())
+    Some(clean.chars().take(240).collect())
 }
 
 fn short_model(m: &str) -> String {

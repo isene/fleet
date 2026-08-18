@@ -50,8 +50,9 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `m` on a session: type a message, Enter drops it on the bus
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
-- `d` flag an inbox item for deletion (dark-red row, advances)
-- `<` delete all flagged items
+- `d` flag for deletion (dark-red row, advances): inbox items, and
+  idle/off sessions (transcript plus its subagent sidecar)
+- `<` delete everything flagged
 - `?` popup help with all keys
 - `q` quit
 

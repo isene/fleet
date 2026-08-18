@@ -147,6 +147,7 @@ fn main() {
     let mut sel_s = 0usize;
     let mut sel_i = 0usize;
     let mut marked: Vec<std::path::PathBuf> = Vec::new();
+    let mut marked_s: Vec<std::path::PathBuf> = Vec::new();
     let mut flash = String::new();
     let mut rates: (std::time::SystemTime, String) =
         (std::time::UNIX_EPOCH, String::new());
@@ -162,6 +163,10 @@ fn main() {
         }
         let items = inbox::scan(&cfg);
         marked.retain(|p| items.iter().any(|i| &i.path == p));
+        // A flagged session that comes alive again is unflagged.
+        marked_s.retain(|p| sess.iter().any(|s| {
+            &s.path == p && matches!(s.state, State::Idle | State::Off)
+        }));
         sel_s = sel_s.min(sess.len().saturating_sub(1));
         sel_i = sel_i.min(items.len().saturating_sub(1));
 
@@ -174,7 +179,8 @@ fn main() {
         if let Some(rows_r) = &rollup_rows {
             draw_rollup(cols, 2, body as u16, rows_r);
         } else {
-            draw_sessions(cols, 2, sess_h as u16, &sess, focus == Focus::Sessions, sel_s);
+            draw_sessions(cols, 2, sess_h as u16, &sess,
+                          focus == Focus::Sessions, sel_s, &marked_s);
             draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
                        focus == Focus::Inbox, sel_i, &marked);
         }
@@ -267,6 +273,22 @@ fn main() {
                     }
                 }
             },
+            Some("d") if focus == Focus::Sessions => {
+                if let Some(s) = sess.get(sel_s) {
+                    if matches!(s.state, State::Idle | State::Off) {
+                        if let Some(pos) = marked_s.iter().position(|p| p == &s.path) {
+                            marked_s.remove(pos);
+                        } else {
+                            marked_s.push(s.path.clone());
+                        }
+                        if sel_s + 1 < sess.len() {
+                            sel_s += 1;
+                        }
+                    } else {
+                        flash = "only idle or off sessions can be flagged".into();
+                    }
+                }
+            }
             Some("d") if focus == Focus::Inbox => {
                 if let Some(i) = items.get(sel_i) {
                     if let Some(pos) = marked.iter().position(|p| p == &i.path) {
@@ -280,17 +302,28 @@ fn main() {
                 }
             }
             Some("<") => {
-                if marked.is_empty() {
+                if marked.is_empty() && marked_s.is_empty() {
                     flash = "nothing flagged for deletion (press d to flag)".into();
                 } else {
-                    let mut n = 0;
+                    let mut nf = 0;
                     for p in &marked {
                         if std::fs::remove_file(p).is_ok() {
-                            n += 1;
+                            nf += 1;
+                        }
+                    }
+                    let mut ns = 0;
+                    for p in &marked_s {
+                        if std::fs::remove_file(p).is_ok() {
+                            ns += 1;
+                        }
+                        let side = p.with_extension(""); // subagent sidecar dir
+                        if side.is_dir() {
+                            let _ = std::fs::remove_dir_all(&side);
                         }
                     }
                     marked.clear();
-                    flash = format!("deleted {} file(s)", n);
+                    marked_s.clear();
+                    flash = format!("deleted {} file(s), {} session(s)", nf, ns);
                 }
             }
             Some("m") if focus == Focus::Sessions => {
@@ -415,7 +448,8 @@ fn ctx_color(k: u64) -> u8 {
     if k < 150 { 78 } else if k < 400 { 220 } else { 196 }
 }
 
-fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel: usize) {
+fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
+                 sel: usize, marked: &[std::path::PathBuf]) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
         " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
@@ -440,7 +474,15 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
             style::styled(&clip(&s.model, 8), Some(33), None, "b"),
             clip_end(&s.prompt, width.max(10))
         );
-        let line = if focused && i == sel {
+        // Delete-flagged: the whole row dark red, selection via the bar.
+        let line = if marked.contains(&s.path) {
+            let body = style::fg(crust::strip_ansi(&line).trim_end(), 88);
+            if focused && i == sel {
+                bg_keep(&body, 238)
+            } else {
+                body
+            }
+        } else if focused && i == sel {
             bg_keep(line.trim_end(), 238)
         } else {
             line
@@ -581,17 +623,18 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
+    t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));
     t.push_str(&format!(" {}\n", hdr("INBOX")));
     t.push_str(&format!("{}open the item\n", key("o / Enter")));
-    t.push_str(&format!("{}flag for deletion (D marks the row)\n", key("d")));
-    t.push_str(&format!("{}delete the flagged files\n", key("<")));
+    t.push_str(&format!("{}flag the item for deletion\n", key("d")));
     t.push_str(&format!(" {}\n", hdr("GLOBAL")));
     t.push_str(&format!("{}switch sessions / inbox\n", key("TAB")));
     t.push_str(&format!("{}select\n", key("↑ ↓")));
+    t.push_str(&format!("{}delete everything flagged\n", key("<")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
-    Popup::centered(50, 15, 231, 236).view(&t);
+    Popup::centered(50, 16, 231, 236).view(&t);
 }
 
 fn draw_footer(cols: u16, rows: u16, focus: Focus,
@@ -606,7 +649,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · c today · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · d flag · < purge · c today · ? help".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge · ? help".to_string(),
         }
     };
