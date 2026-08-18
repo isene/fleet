@@ -187,7 +187,7 @@ fn main() {
                 }
             }
         }
-        let logs = inbox::log_tail(8);
+        let logs = inbox::pending();
         marked.retain(|p| items.iter().any(|i| &i.path == p));
         // A flagged session that comes alive again is unflagged.
         marked_s.retain(|p| sess.iter().any(|s| {
@@ -383,6 +383,7 @@ fn main() {
                 rollup_rows = Some(rollup::today(&sessions::load_tags()));
             }
             Some("?") | Some("h") => help(),
+            Some("M") => show_log(),
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
                 cols = c;
@@ -572,7 +573,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         out.push_str(&line);
         out.push('\n');
     }
-    // Delivered bus traffic (the log tail), dim, below the live items.
+    // Pending bus messages (awaiting delivery), dim, below the items.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -648,6 +649,27 @@ fn resurrect(s: &Session) -> String {
     }
 }
 
+/// The full bus traffic log in a scrollable popup, newest first.
+fn show_log() {
+    let logs = inbox::log_tail(500);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut t = String::new();
+    if logs.is_empty() {
+        t.push_str(" no bus traffic logged yet");
+    }
+    for e in &logs {
+        t.push_str(&format!(" {:>6}  → {}: {}\n",
+                            fmt_age(now.saturating_sub(e.ts)), e.dest, e.text));
+    }
+    let (cols, rows) = Crust::terminal_size();
+    let w = cols.saturating_sub(8).clamp(40, 110);
+    let h = ((logs.len().max(1) + 2) as u16).clamp(5, rows.saturating_sub(4));
+    Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
+}
+
 /// Append one line to the bus log. Fleet logs only phone-bound sends it
 /// observes; deliveries are logged by the receiving hook, so each
 /// message lands in the log exactly once.
@@ -719,10 +741,11 @@ fn help() {
     t.push_str(&format!("{}switch sessions / inbox\n", key("TAB")));
     t.push_str(&format!("{}select\n", key("↑ ↓")));
     t.push_str(&format!("{}delete everything flagged\n", key("<")));
+    t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
-    Popup::centered(50, 17, 231, 236).view(&t);
+    Popup::centered(50, 18, 231, 236).view(&t);
 }
 
 fn draw_footer(cols: u16, rows: u16, focus: Focus,
@@ -738,7 +761,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
     } else {
         match focus {
             Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · k stop · d flag · < purge · c today · ? help".to_string(),
-            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge · ? help".to_string(),
+            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge · M log · ? help".to_string(),
         }
     };
     let right = format!("fleet v{} ", VERSION);

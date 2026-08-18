@@ -61,6 +61,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `d` flag for deletion (dark-red row, advances): inbox items, and
   idle/off sessions (transcript plus its subagent sidecar)
 - `<` delete everything flagged
+- `M` popup with the full bus message log (pending messages show as
+  dim rows in the INBOX pane)
 - `?` popup help with all keys
 - `q` quit
 

@@ -20,6 +20,56 @@ pub struct LogEntry {
     pub ts: u64,
 }
 
+/// Messages sitting in the bus and relay mailboxes, not yet delivered.
+/// Newest first. These rows live in the INBOX pane; delivered traffic
+/// lives in the log popup.
+pub fn pending() -> Vec<LogEntry> {
+    let now = SystemTime::now();
+    let mut out = Vec::new();
+    for root in [crate::config::home().join(".fleet/bus"),
+                 crate::config::home().join(".fleet/relay")] {
+        let dirs = match std::fs::read_dir(&root) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        for d in dirs.flatten() {
+            let dest = d.file_name().to_string_lossy().to_string();
+            let files = match std::fs::read_dir(d.path()) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            for f in files.flatten() {
+                let p = f.path();
+                if p.extension().map(|e| e != "msg").unwrap_or(true) {
+                    continue;
+                }
+                let ts = f
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or_else(|| {
+                        now.duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0)
+                    });
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                let text: String = text
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(120)
+                    .collect();
+                out.push(LogEntry { dest: dest.clone(), text, ts });
+            }
+        }
+    }
+    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    out
+}
+
 /// Tail of ~/.fleet/log: the delivered bus traffic, newest first.
 /// The hook appends deliveries; fleet appends phone-bound sends it sees.
 pub fn log_tail(n: usize) -> Vec<LogEntry> {
