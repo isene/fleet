@@ -509,7 +509,9 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
         let line = format!(
             " {}  {}  {}  {:>2}  {}  {}  {}",
-            style::fg(&clip(&s.tag, 10), 13),
+            // Bookmarked tags magenta like the statusline; unbookmarked
+            // sessions show their directory name in light gray.
+            style::fg(&clip(&s.tag, 10), if s.tagged { 13 } else { 250 }),
             style::styled(&format!("{:<7}", s.state.label()),
                           Some(state_color(s.state)), None,
                           if s.state == State::Yours { "b" } else { "" }),
