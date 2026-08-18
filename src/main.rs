@@ -297,7 +297,8 @@ fn main() {
 }
 
 fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item]) {
-    let mut pane = Pane::new(1, 1, cols, 1, 255, 236);
+    // Darker than the column-header bars (236), so the two read apart.
+    let mut pane = Pane::new(1, 1, cols, 1, 255, 234);
     let yours = sess.iter().filter(|s| s.state == State::Yours).count();
     let working = sess.iter().filter(|s| s.state == State::Working).count();
     let mut line = format!(" {}  ", style::bold("fleet"));
@@ -350,7 +351,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
         // styled() spans end in a full reset, so the selected row is
         // stripped plain first and underlined whole.
         let line = if focused && i == sel {
-            format!("→ {}", style::underline(&crust::strip_ansi(&line)))
+            format!("→ {}", style::underline(crust::strip_ansi(&line).trim_end()))
         } else {
             format!("  {}", line)
         };
@@ -382,13 +383,13 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         let line = if marked.contains(&it.path) {
             let plain = crust::strip_ansi(&line);
             let body = if focused && i == sel {
-                style::underline(&style::fg(&plain, 88))
+                style::underline(&style::fg(plain.trim_end(), 88))
             } else {
-                style::fg(&plain, 88)
+                style::fg(plain.trim_end(), 88)
             };
             format!("{} {}", style::fg("D", 88), body)
         } else if focused && i == sel {
-            format!("→ {}", style::underline(&crust::strip_ansi(&line)))
+            format!("→ {}", style::underline(crust::strip_ansi(&line).trim_end()))
         } else {
             format!("  {}", line)
         };
