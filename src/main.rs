@@ -148,6 +148,8 @@ fn main() {
     let mut sel_i = 0usize;
     let mut marked: Vec<std::path::PathBuf> = Vec::new();
     let mut flash = String::new();
+    let mut rates: (std::time::SystemTime, String) =
+        (std::time::UNIX_EPOCH, String::new());
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
     let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
     let mut msg_buf = String::new();
@@ -167,7 +169,8 @@ fn main() {
         let inbox_h = (items.len() + 2).clamp(3, (body / 3).max(3));
         let sess_h = body.saturating_sub(inbox_h);
 
-        draw_header(cols, &sess, &items);
+        refresh_rates(&mut rates);
+        draw_header(cols, &sess, &items, &rates.1);
         if let Some(rows_r) = &rollup_rows {
             draw_rollup(cols, 2, body as u16, rows_r);
         } else {
@@ -241,7 +244,13 @@ fn main() {
             Some("ENTER") | Some("o") => match focus {
                 Focus::Sessions => {
                     if let Some(s) = sess.get(sel_s) {
+                        // Same workspace: injecting tile's hotkey would
+                        // TOGGLE to the previous workspace, so don't.
+                        let cur = wm.as_ref().and_then(|w| w.current_desktop());
                         flash = match s.ws {
+                            Some(w) if Some(w) == cur => {
+                                format!("{} is on this workspace", s.tag)
+                            }
                             Some(w) => jump(&s.tag, w),
                             None => resurrect(s),
                         };
@@ -308,7 +317,7 @@ fn main() {
     Crust::cleanup();
 }
 
-fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item]) {
+fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) {
     // Darker than the column-header bars (236), so the two read apart.
     let mut pane = Pane::new(1, 1, cols, 1, 255, 234);
     let yours = sess.iter().filter(|s| s.state == State::Yours).count();
@@ -317,9 +326,81 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item]) {
     line.push_str(&style::styled(&format!("{} YOURS", yours), Some(208), None, "b"));
     line.push_str(&format!("  ·  {} working  ·  {} sessions", working, sess.len()));
     line.push_str(&format!("  ·  inbox {}", items.len()));
+    if !rates.is_empty() {
+        line.push_str(&format!("  ·  {}", rates));
+    }
     pad(&mut line, cols as usize);
     pane.set_text(&line);
     pane.refresh();
+}
+
+/// Usage percentages, statusline-style: "[4%/28%(51%) Fri 21:00]".
+/// Read from the statusline's own OAuth usage cache; the running CC
+/// sessions keep that file fresh, so fleet only stats it and re-reads
+/// on mtime change. Never fetches anything itself.
+fn refresh_rates(cache: &mut (std::time::SystemTime, String)) {
+    let path = "/tmp/claude-oauth-usage-cache.json";
+    let mtime = match std::fs::metadata(path).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    if mtime == cache.0 {
+        return;
+    }
+    cache.0 = mtime;
+    cache.1 = build_rates(path).unwrap_or_default();
+}
+
+fn rate_color(p: u64) -> u8 {
+    if p < 50 { 65 } else if p < 80 { 136 } else { 124 }
+}
+
+fn build_rates(path: &str) -> Option<String> {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let (mut sess, mut week, mut fable, mut resets) = (None, None, None, None);
+    for l in v["limits"].as_array()? {
+        match l["kind"].as_str().unwrap_or("") {
+            "session" => sess = l["percent"].as_u64(),
+            "weekly_all" => {
+                week = l["percent"].as_u64();
+                resets = l["resets_at"].as_str().map(str::to_string);
+            }
+            "weekly_scoped" => {
+                if l["scope"]["model"]["display_name"] == "Fable" {
+                    fable = l["percent"].as_u64();
+                }
+            }
+            _ => {}
+        }
+    }
+    let g = |s: &str| style::fg(s, 242);
+    let mut out = g("[");
+    if let Some(p) = sess {
+        out += &style::fg(&format!("{}%", p), rate_color(p));
+    }
+    if let Some(p) = week {
+        out += &g("/");
+        out += &style::fg(&format!("{}%", p), rate_color(p));
+    }
+    if let Some(p) = fable {
+        out += &g("(");
+        out += &style::fg(&format!("{}%", p), rate_color(p));
+        out += &g(")");
+    }
+    if let Some(e) = resets.as_deref().and_then(rollup::iso_to_epoch) {
+        let d = Command::new("date")
+            .args(["-d", &format!("@{}", e), "+%a %H:%M"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !d.is_empty() {
+            out += &style::fg(&format!(" {}", d), 240);
+        }
+    }
+    out += &g("]");
+    Some(out)
 }
 
 /// Full-width bold header bar on a dark background, for readability.

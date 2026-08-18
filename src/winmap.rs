@@ -17,6 +17,7 @@ pub struct WinMap {
     atom_client_list: Atom,
     atom_wm_pid: Atom,
     atom_wm_desktop: Atom,
+    atom_current_desktop: Atom,
 }
 
 impl WinMap {
@@ -27,13 +28,22 @@ impl WinMap {
         let atom_client_list = intern(&conn, b"_NET_CLIENT_LIST")?;
         let atom_wm_pid = intern(&conn, b"_NET_WM_PID")?;
         let atom_wm_desktop = intern(&conn, b"_NET_WM_DESKTOP")?;
+        let atom_current_desktop = intern(&conn, b"_NET_CURRENT_DESKTOP")?;
         Some(WinMap {
             conn,
             root,
             atom_client_list,
             atom_wm_pid,
             atom_wm_desktop,
+            atom_current_desktop,
         })
+    }
+
+    /// The workspace currently shown (root's _NET_CURRENT_DESKTOP).
+    pub fn current_desktop(&self) -> Option<u32> {
+        self.get_atom_array(self.root, self.atom_current_desktop,
+                            AtomEnum::CARDINAL.into())
+            .and_then(|v| v.first().copied())
     }
 
     /// Build a {pid → workspace_index} map. Tries _NET_CLIENT_LIST

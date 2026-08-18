@@ -104,8 +104,8 @@ fn local_midnight_epoch() -> u64 {
         .unwrap_or(0)
 }
 
-/// "2026-08-17T15:04:05.123Z" -> epoch seconds. Z-times only.
-fn iso_to_epoch(s: &str) -> Option<u64> {
+/// "2026-08-17T15:04:05.123Z" -> epoch seconds. UTC times only.
+pub fn iso_to_epoch(s: &str) -> Option<u64> {
     let b = s.as_bytes();
     if b.len() < 19 {
         return None;
