@@ -48,7 +48,7 @@ fn state_color(s: State) -> u8 {
         State::Yours => 208,
         State::Idle => 244,
         State::Off => 60,
-        State::Older => 238,
+        State::Older => 240, // darker than off, but never the bar's 238
     }
 }
 
