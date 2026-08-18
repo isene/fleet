@@ -125,7 +125,8 @@ fn main() {
     let mut focus = Focus::Sessions;
     let mut sel_s = 0usize;
     let mut sel_i = 0usize;
-    let mut pending_del: Option<std::path::PathBuf> = None;
+    let mut pending_del: Option<Vec<std::path::PathBuf>> = None;
+    let mut marked: Vec<std::path::PathBuf> = Vec::new();
     let mut flash = String::new();
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
     let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
@@ -138,6 +139,7 @@ fn main() {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
         }
         let items = inbox::scan(&cfg);
+        marked.retain(|p| items.iter().any(|i| &i.path == p));
         sel_s = sel_s.min(sess.len().saturating_sub(1));
         sel_i = sel_i.min(items.len().saturating_sub(1));
 
@@ -151,7 +153,7 @@ fn main() {
         } else {
             draw_sessions(cols, 2, sess_h as u16, &sess, focus == Focus::Sessions, sel_s);
             draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
-                       focus == Focus::Inbox, sel_i);
+                       focus == Focus::Inbox, sel_i, &marked);
         }
         draw_footer(cols, rows, focus, &pending_del, &flash,
                     rollup_rows.is_some(), &msg_to, &msg_buf);
@@ -194,12 +196,16 @@ fn main() {
             continue;
         }
 
-        if let Some(path) = pending_del.take() {
+        if let Some(paths) = pending_del.take() {
             if k == Some("y") || k == Some("Y") {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => flash = format!("deleted {}", path.display()),
-                    Err(e) => flash = format!("delete failed: {}", e),
+                let mut n = 0;
+                for p in &paths {
+                    if std::fs::remove_file(p).is_ok() {
+                        n += 1;
+                    }
                 }
+                marked.clear();
+                flash = format!("deleted {} file(s)", n);
             } else {
                 flash = "delete cancelled".into();
             }
@@ -232,7 +238,7 @@ fn main() {
                     if let Some(s) = sess.get(sel_s) {
                         flash = match s.ws {
                             Some(w) => jump(&s.tag, w),
-                            None => format!("{} has no window here", s.tag),
+                            None => resurrect(s),
                         };
                     }
                 }
@@ -247,9 +253,23 @@ fn main() {
                     }
                 }
             },
-            Some("D") if focus == Focus::Inbox => {
+            Some("d") if focus == Focus::Inbox => {
                 if let Some(i) = items.get(sel_i) {
-                    pending_del = Some(i.path.clone());
+                    if let Some(pos) = marked.iter().position(|p| p == &i.path) {
+                        marked.remove(pos);
+                    } else {
+                        marked.push(i.path.clone());
+                    }
+                    if sel_i + 1 < items.len() {
+                        sel_i += 1; // flag-and-advance, pointer style
+                    }
+                }
+            }
+            Some("<") => {
+                if marked.is_empty() {
+                    flash = "nothing flagged for deletion (press d to flag)".into();
+                } else {
+                    pending_del = Some(marked.clone());
                 }
             }
             Some("m") if focus == Focus::Sessions => {
@@ -289,32 +309,50 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item]) {
     pane.refresh();
 }
 
+/// Full-width bold header bar on a dark background, for readability.
+fn header_bar(text: &str, cols: u16) -> String {
+    let mut s = text.to_string();
+    pad(&mut s, cols as usize);
+    format!("{}\n", style::styled(&s, Some(250), Some(236), "b"))
+}
+
+/// Context size coloring: the statusline's green / yellow / red family.
+fn ctx_color(k: u64) -> u8 {
+    if k < 150 { 78 } else if k < 400 { 220 } else { 196 }
+}
+
 fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel: usize) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
-        " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
+        "   {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
         "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT"
     );
-    let mut out = format!("{}\n", style::styled(&hdr, Some(250), None, "b"));
+    let mut out = header_bar(&hdr, cols);
     let take = (h as usize).saturating_sub(1).min(sess.len());
     for (i, s) in sess.iter().take(take).enumerate() {
         let width = (cols as usize).saturating_sub(52);
+        // Colors follow the CC statusline: bookmark tags magenta 13,
+        // model bold blue, context green/yellow/red, timestamps gray 242.
+        let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
         let line = format!(
-            " {:<10}  {}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
-            clip(&s.tag, 10),
+            " {}  {}  {}  {:>2}  {}  {}  {}",
+            style::fg(&clip(&s.tag, 10), 13),
             style::styled(&format!("{:<7}", s.state.label()),
                           Some(state_color(s.state)), None,
                           if s.state == State::Yours { "b" } else { "" }),
-            fmt_age(s.age_secs),
+            style::fg(&format!("{:>6}", fmt_age(s.age_secs)), 242),
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
-            s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into()),
-            clip(&s.model, 8),
+            style::fg(&format!("{:>5}", ctx), s.ctx_k.map(ctx_color).unwrap_or(242)),
+            style::styled(&clip(&s.model, 8), Some(33), None, "b"),
             clip(&s.prompt, width.max(10))
         );
+        // pointer / RTFM style: → prefix + underline marks the selection.
+        // styled() spans end in a full reset, so the selected row is
+        // stripped plain first and underlined whole.
         let line = if focused && i == sel {
-            style::styled(&line, None, Some(238), "")
+            format!("→ {}", style::underline(&crust::strip_ansi(&line)))
         } else {
-            line
+            format!("  {}", line)
         };
         out.push_str(&line);
         out.push('\n');
@@ -323,25 +361,36 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
     pane.refresh();
 }
 
-fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item], focused: bool, sel: usize) {
+fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
+              focused: bool, sel: usize, marked: &[std::path::PathBuf]) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
-    let hdr = format!(" {:<8}  {:>6}  {}", "INBOX", "AGE", "FILE");
-    let mut out = format!("{}\n", style::styled(&hdr, Some(250), None, "b"));
+    let hdr = format!("   {:<8}  {:>6}  {}", "INBOX", "AGE", "FILE");
+    let mut out = header_bar(&hdr, cols);
     if items.is_empty() {
         out.push_str(&style::dim("  nothing waiting"));
     }
     let take = (h as usize).saturating_sub(1).min(items.len());
     for (i, it) in items.iter().take(take).enumerate() {
         let line = format!(
-            " {}  {:>6}  {}",
-            style::styled(&clip(&it.label, 8), Some(51), None, ""),
-            fmt_age(it.age_secs),
+            " {}  {}  {}",
+            style::fg(&clip(&it.label, 8), 13),
+            style::fg(&format!("{:>6}", fmt_age(it.age_secs)), 242),
             clip(&it.name, (cols as usize).saturating_sub(22).max(10))
         );
-        let line = if focused && i == sel {
-            style::styled(&line, None, Some(238), "")
+        // Delete-flagged (pointer style): dark-red D prefix + dark-red row;
+        // selection still shows via the underline.
+        let line = if marked.contains(&it.path) {
+            let plain = crust::strip_ansi(&line);
+            let body = if focused && i == sel {
+                style::underline(&style::fg(&plain, 88))
+            } else {
+                style::fg(&plain, 88)
+            };
+            format!("{} {}", style::fg("D", 88), body)
+        } else if focused && i == sel {
+            format!("→ {}", style::underline(&crust::strip_ansi(&line)))
         } else {
-            line
+            format!("  {}", line)
         };
         out.push_str(&line);
         out.push('\n');
@@ -362,6 +411,25 @@ fn jump(tag: &str, ws: u32) -> String {
     {
         Ok(st) if st.success() => format!("→ {} on ws {}", tag, ws + 1),
         _ => format!("{} is on workspace {} (Mod4+{})", tag, ws + 1, ws + 1),
+    }
+}
+
+/// A session with no window on this display: resume it in a fresh glass.
+/// Tagged sessions go through `cc <tag>` (path + auto-follow); untagged
+/// ones get a plain resume in their own working directory.
+fn resurrect(s: &Session) -> String {
+    let mut c = Command::new("glass");
+    if s.tagged {
+        c.args(["-e", "cc", &s.tag]);
+    } else {
+        c.args(["-e", "claude", "--resume", &s.id]);
+        if !s.cwd.is_empty() {
+            c.current_dir(&s.cwd);
+        }
+    }
+    match c.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        Ok(_) => format!("resuming {} in a new glass", s.tag),
+        Err(e) => format!("glass failed: {}", e),
     }
 }
 
@@ -403,39 +471,40 @@ fn help() {
     let key = |s: &str| style::styled(&format!("  {:<10}", s), Some(46), None, "");
     let mut t = String::new();
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
-    t.push_str(&format!("{}jump to its workspace\n", key("Enter")));
+    t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
     t.push_str(&format!(" {}\n", hdr("INBOX")));
     t.push_str(&format!("{}open the item\n", key("o / Enter")));
-    t.push_str(&format!("{}delete the item (y/n)\n", key("D")));
+    t.push_str(&format!("{}flag for deletion (D marks the row)\n", key("d")));
+    t.push_str(&format!("{}delete the flagged files (y/n)\n", key("<")));
     t.push_str(&format!(" {}\n", hdr("GLOBAL")));
     t.push_str(&format!("{}switch sessions / inbox\n", key("TAB")));
     t.push_str(&format!("{}select\n", key("↑ ↓")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
-    Popup::centered(50, 13, 231, 236).view(&t);
+    Popup::centered(50, 15, 231, 236).view(&t);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_footer(cols: u16, rows: u16, focus: Focus, pending: &Option<std::path::PathBuf>,
+fn draw_footer(cols: u16, rows: u16, focus: Focus,
+               pending: &Option<Vec<std::path::PathBuf>>,
                flash: &str, in_rollup: bool, msg_to: &Option<(String, String)>,
                msg_buf: &str) {
     let mut pane = Pane::new(1, rows, cols, 1, 244, 236);
     let left = if let Some((_, tag)) = msg_to {
         format!(" msg → {}: {}_  (Enter send · Esc cancel)", tag, msg_buf)
-    } else if let Some(p) = pending {
-        style::styled(
-            &format!(" delete {}?  y / n", p.file_name().unwrap_or_default().to_string_lossy()),
-            Some(208), None, "b")
+    } else if let Some(paths) = pending {
+        style::styled(&format!(" delete {} flagged file(s)?  y / n", paths.len()),
+                      Some(208), None, "b")
     } else if !flash.is_empty() {
         style::fg(flash, 46)
     } else if in_rollup {
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump · m message · c today · ? help".to_string(),
-            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · D delete · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · c today · ? help".to_string(),
+            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge · ? help".to_string(),
         }
     };
     let right = format!("fleet v{} ", VERSION);
