@@ -16,7 +16,8 @@ import json
 import os
 import sys
 
-BUS = os.path.expanduser("~/.fleet/bus")
+ROOTS = [os.path.expanduser("~/.fleet/bus"),
+         os.path.expanduser("~/.transfer/fleet-bus")]  # phone, via Syncthing
 BOOKMARKS = os.path.expanduser("~/.cc-sessions/bookmarks.json")
 
 
@@ -34,25 +35,26 @@ def addrs(session_id):
 
 
 def main():
-    if not os.path.isdir(BUS):
+    if not any(os.path.isdir(r) for r in ROOTS):
         return
     data = json.load(sys.stdin)
     sid = data.get("session_id") or ""
     msgs = []
-    for addr in sorted(addrs(sid)):
-        d = os.path.join(BUS, addr)
-        if not os.path.isdir(d):
-            continue
-        for name in sorted(os.listdir(d)):
-            path = os.path.join(d, name)
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    text = fh.read().strip()
-                os.unlink(path)
-            except OSError:
+    for root in ROOTS:
+        for addr in sorted(addrs(sid)):
+            d = os.path.join(root, addr)
+            if not os.path.isdir(d):
                 continue
-            if text:
-                msgs.append(text)
+            for name in sorted(os.listdir(d)):
+                path = os.path.join(d, name)
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        text = fh.read().strip()
+                    os.unlink(path)
+                except OSError:
+                    continue
+                if text:
+                    msgs.append(text)
     if not msgs:
         return
     ctx = ("Messages delivered via the fleet bus (from other local "
