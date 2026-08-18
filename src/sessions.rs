@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-const TAIL: u64 = 65536;
+const TAIL: u64 = 262144;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum State {
@@ -245,6 +245,14 @@ fn user_text(content: &Value) -> Option<String> {
     let clean = clean.trim();
     if clean.starts_with('<') {
         return None; // system-reminder / command wrapper, not the user
+    }
+    // Hook feedback and interrupts are typed as user entries but are not
+    // the user's prompt; skip them so an earlier real prompt surfaces.
+    for noise in ["Stop hook feedback:", "[Request interrupted", "Caveat:",
+                  "Base directory for this skill:"] {
+        if clean.starts_with(noise) {
+            return None;
+        }
     }
     Some(clean.chars().take(240).collect())
 }
