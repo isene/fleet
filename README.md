@@ -1,12 +1,16 @@
 # fleet
 
-![Rust](https://img.shields.io/badge/language-Rust-orange) ![Unlicense](https://img.shields.io/badge/license-Unlicense-green) [![Fe2O3](https://img.shields.io/badge/suite-Fe%E2%82%82O%E2%82%83-b7410e)](https://github.com/isene/fe2o3)
+![Rust](https://img.shields.io/badge/language-Rust-orange) ![Release](https://badgen.net/github/release/isene/fleet) ![Unlicense](https://img.shields.io/badge/license-Unlicense-green) [![Fe2O3](https://img.shields.io/badge/suite-Fe%E2%82%82O%E2%82%83-b7410e)](https://github.com/isene/fe2o3)
+
+<img src="img/fleet.svg" align="left" width="150" height="150">
 
 Claude Code mission control. One screen for every session on the
 machine: who is working, who waits for you, on which workspace, with
 what context size. Plus an inbox pane for the folders where handoffs
 land (screenshots, phone transfers). Part of the
 [Fe2O3](https://github.com/isene/fe2o3) Rust terminal suite.
+
+<br clear="left"/>
 
 ## Why
 
