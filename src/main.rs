@@ -51,6 +51,25 @@ fn state_color(s: State) -> u8 {
     }
 }
 
+/// Truncate without padding: for a row's last column, so the line never
+/// reaches pane width (a full-width row wraps and double-spaces the list).
+fn clip_end(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max - 1).collect();
+        t.push('…');
+        t
+    }
+}
+
+/// Underline that survives the full resets styled() spans end in: re-arm
+/// after every reset, the way crust's select_bar re-arms reverse. Colors
+/// stay; the underline runs unbroken under them.
+fn underline_keep(s: &str) -> String {
+    format!("\x1b[4m{}\x1b[24m", s.replace("\x1b[0m", "\x1b[0m\x1b[4m"))
+}
+
 fn clip(s: &str, max: usize) -> String {
     let n = s.chars().count();
     if n <= max {
@@ -125,7 +144,6 @@ fn main() {
     let mut focus = Focus::Sessions;
     let mut sel_s = 0usize;
     let mut sel_i = 0usize;
-    let mut pending_del: Option<Vec<std::path::PathBuf>> = None;
     let mut marked: Vec<std::path::PathBuf> = Vec::new();
     let mut flash = String::new();
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
@@ -155,7 +173,7 @@ fn main() {
             draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
                        focus == Focus::Inbox, sel_i, &marked);
         }
-        draw_footer(cols, rows, focus, &pending_del, &flash,
+        draw_footer(cols, rows, focus, &flash,
                     rollup_rows.is_some(), &msg_to, &msg_buf);
 
         let key = Input::getchr(Some(2));
@@ -196,21 +214,6 @@ fn main() {
             continue;
         }
 
-        if let Some(paths) = pending_del.take() {
-            if k == Some("y") || k == Some("Y") {
-                let mut n = 0;
-                for p in &paths {
-                    if std::fs::remove_file(p).is_ok() {
-                        n += 1;
-                    }
-                }
-                marked.clear();
-                flash = format!("deleted {} file(s)", n);
-            } else {
-                flash = "delete cancelled".into();
-            }
-            continue;
-        }
 
         match k {
             Some("q") | Some("Q") => break,
@@ -269,7 +272,14 @@ fn main() {
                 if marked.is_empty() {
                     flash = "nothing flagged for deletion (press d to flag)".into();
                 } else {
-                    pending_del = Some(marked.clone());
+                    let mut n = 0;
+                    for p in &marked {
+                        if std::fs::remove_file(p).is_ok() {
+                            n += 1;
+                        }
+                    }
+                    marked.clear();
+                    flash = format!("deleted {} file(s)", n);
                 }
             }
             Some("m") if focus == Focus::Sessions => {
@@ -331,7 +341,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
     let mut out = header_bar(&hdr, cols);
     let take = (h as usize).saturating_sub(1).min(sess.len());
     for (i, s) in sess.iter().take(take).enumerate() {
-        let width = (cols as usize).saturating_sub(52);
+        let width = (cols as usize).saturating_sub(54);
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
@@ -345,13 +355,12 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
             style::fg(&format!("{:>5}", ctx), s.ctx_k.map(ctx_color).unwrap_or(242)),
             style::styled(&clip(&s.model, 8), Some(33), None, "b"),
-            clip(&s.prompt, width.max(10))
+            clip_end(&s.prompt, width.max(10))
         );
-        // pointer / RTFM style: → prefix + underline marks the selection.
-        // styled() spans end in a full reset, so the selected row is
-        // stripped plain first and underlined whole.
+        // pointer / RTFM style: → prefix + underline marks the selection,
+        // colors kept underneath.
         let line = if focused && i == sel {
-            format!("→ {}", style::underline(crust::strip_ansi(&line).trim_end()))
+            format!("→ {}", underline_keep(line.trim_end()))
         } else {
             format!("  {}", line)
         };
@@ -376,7 +385,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             " {}  {}  {}",
             style::fg(&clip(&it.label, 8), 13),
             style::fg(&format!("{:>6}", fmt_age(it.age_secs)), 242),
-            clip(&it.name, (cols as usize).saturating_sub(22).max(10))
+            clip_end(&it.name, (cols as usize).saturating_sub(24).max(10))
         );
         // Delete-flagged (pointer style): dark-red D prefix + dark-red row;
         // selection still shows via the underline.
@@ -389,7 +398,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             };
             format!("{} {}", style::fg("D", 88), body)
         } else if focused && i == sel {
-            format!("→ {}", style::underline(crust::strip_ansi(&line).trim_end()))
+            format!("→ {}", underline_keep(line.trim_end()))
         } else {
             format!("  {}", line)
         };
@@ -477,7 +486,7 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("INBOX")));
     t.push_str(&format!("{}open the item\n", key("o / Enter")));
     t.push_str(&format!("{}flag for deletion (D marks the row)\n", key("d")));
-    t.push_str(&format!("{}delete the flagged files (y/n)\n", key("<")));
+    t.push_str(&format!("{}delete the flagged files\n", key("<")));
     t.push_str(&format!(" {}\n", hdr("GLOBAL")));
     t.push_str(&format!("{}switch sessions / inbox\n", key("TAB")));
     t.push_str(&format!("{}select\n", key("↑ ↓")));
@@ -487,17 +496,12 @@ fn help() {
     Popup::centered(50, 15, 231, 236).view(&t);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_footer(cols: u16, rows: u16, focus: Focus,
-               pending: &Option<Vec<std::path::PathBuf>>,
                flash: &str, in_rollup: bool, msg_to: &Option<(String, String)>,
                msg_buf: &str) {
     let mut pane = Pane::new(1, rows, cols, 1, 244, 236);
     let left = if let Some((_, tag)) = msg_to {
         format!(" msg → {}: {}_  (Enter send · Esc cancel)", tag, msg_buf)
-    } else if let Some(paths) = pending {
-        style::styled(&format!(" delete {} flagged file(s)?  y / n", paths.len()),
-                      Some(208), None, "b")
     } else if !flash.is_empty() {
         style::fg(flash, 46)
     } else if in_rollup {

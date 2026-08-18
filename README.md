@@ -51,7 +51,7 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
 - `d` flag an inbox item for deletion (dark-red `D` row, advances)
-- `<` delete all flagged items (asks y/n)
+- `<` delete all flagged items
 - `?` popup help with all keys
 - `q` quit
 
