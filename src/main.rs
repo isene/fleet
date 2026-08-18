@@ -152,6 +152,10 @@ fn main() {
     let mut flash = String::new();
     let mut rates: (std::time::SystemTime, String) =
         (std::time::UNIX_EPOCH, String::new());
+    // Files seen in relay/phone: new arrivals are laptop→phone sends,
+    // logged here since no hook observes that direction. The baseline
+    // pass logs nothing, or every restart would re-log leftovers.
+    let mut phone_seen: Option<std::collections::HashSet<String>> = None;
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
     let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
     let mut msg_buf = String::new();
@@ -163,6 +167,27 @@ fn main() {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
         }
         let items = inbox::scan(&cfg);
+        let pdir = config::home().join(".fleet/relay/phone");
+        let names: Vec<String> = std::fs::read_dir(&pdir)
+            .map(|it| {
+                it.flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        match &mut phone_seen {
+            None => phone_seen = Some(names.into_iter().collect()),
+            Some(seen) => {
+                for n in names {
+                    if seen.insert(n.clone()) {
+                        if let Ok(t) = std::fs::read_to_string(pdir.join(&n)) {
+                            log_append("phone", &t);
+                        }
+                    }
+                }
+            }
+        }
+        let logs = inbox::log_tail(8);
         marked.retain(|p| items.iter().any(|i| &i.path == p));
         // A flagged session that comes alive again is unflagged.
         marked_s.retain(|p| sess.iter().any(|s| {
@@ -173,7 +198,7 @@ fn main() {
         sel_i = sel_i.min(items.len().saturating_sub(1));
 
         let body = rows.saturating_sub(2) as usize;
-        let inbox_h = (items.len() + 2).clamp(3, (body / 3).max(3));
+        let inbox_h = (items.len() + logs.len() + 2).clamp(3, (body / 3).max(3));
         let sess_h = body.saturating_sub(inbox_h);
 
         refresh_rates(&mut rates);
@@ -184,7 +209,7 @@ fn main() {
             draw_sessions(cols, 2, sess_h as u16, &sess,
                           focus == Focus::Sessions, sel_s, &marked_s);
             draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
-                       focus == Focus::Inbox, sel_i, &marked);
+                       focus == Focus::Inbox, sel_i, &marked, &logs);
         }
         draw_footer(cols, rows, focus, &flash,
                     rollup_rows.is_some(), &msg_to, &msg_buf);
@@ -514,11 +539,12 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
 }
 
 fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
-              focused: bool, sel: usize, marked: &[std::path::PathBuf]) {
+              focused: bool, sel: usize, marked: &[std::path::PathBuf],
+              logs: &[inbox::LogEntry]) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(" {:<8}  {:>6}  {}", "INBOX", "AGE", "FILE");
     let mut out = header_bar(&hdr, cols);
-    if items.is_empty() {
+    if items.is_empty() && logs.is_empty() {
         out.push_str(&style::dim("  nothing waiting"));
     }
     let take = (h as usize).saturating_sub(1).min(items.len());
@@ -544,6 +570,26 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             line
         };
         out.push_str(&line);
+        out.push('\n');
+    }
+    // Delivered bus traffic (the log tail), dim, below the live items.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let room = (h as usize).saturating_sub(1 + take);
+    for e in logs.iter().take(room) {
+        let width = (cols as usize)
+            .saturating_sub(26 + e.dest.chars().count())
+            .max(10);
+        let line = format!(
+            " {:<8}  {:>6}  → {}: {}",
+            "msg",
+            fmt_age(now.saturating_sub(e.ts)),
+            e.dest,
+            clip_end(&e.text, width)
+        );
+        out.push_str(&style::fg(&line, 245));
         out.push('\n');
     }
     pane.set_text(out.trim_end_matches('\n'));
@@ -599,6 +645,28 @@ fn resurrect(s: &Session) -> String {
     match c.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(_) => format!("resuming {} in a new glass", s.tag),
         Err(e) => format!("glass failed: {}", e),
+    }
+}
+
+/// Append one line to the bus log. Fleet logs only phone-bound sends it
+/// observes; deliveries are logged by the receiving hook, so each
+/// message lands in the log exactly once.
+fn log_append(dest: &str, text: &str) {
+    let line: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = config::home().join(".fleet/log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{}\t{}\t{}", ts, dest, line);
     }
 }
 

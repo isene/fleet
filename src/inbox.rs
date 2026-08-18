@@ -14,6 +14,33 @@ pub struct Item {
     pub age_secs: u64,
 }
 
+pub struct LogEntry {
+    pub dest: String,
+    pub text: String,
+    pub ts: u64,
+}
+
+/// Tail of ~/.fleet/log: the delivered bus traffic, newest first.
+/// The hook appends deliveries; fleet appends phone-bound sends it sees.
+pub fn log_tail(n: usize) -> Vec<LogEntry> {
+    let path = crate::config::home().join(".fleet/log");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    text.lines()
+        .rev()
+        .take(n)
+        .filter_map(|l| {
+            let mut f = l.splitn(3, '\t');
+            let ts: u64 = f.next()?.parse().ok()?;
+            let dest = f.next()?.to_string();
+            let text = f.next()?.to_string();
+            Some(LogEntry { dest, text, ts })
+        })
+        .collect()
+}
+
 pub fn scan(cfg: &Config) -> Vec<Item> {
     let now = SystemTime::now();
     let max_age = cfg.inbox_days * 86400;

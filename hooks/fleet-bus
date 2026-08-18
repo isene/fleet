@@ -19,6 +19,7 @@ import sys
 ROOTS = [os.path.expanduser("~/.fleet/bus"),
          os.path.expanduser("~/.fleet/relay")]  # phone, via the relay host
 BOOKMARKS = os.path.expanduser("~/.cc-sessions/bookmarks.json")
+LOG = os.path.expanduser("~/.fleet/log")  # delivery log; fleet shows the tail
 
 
 def addrs(session_id):
@@ -54,12 +55,20 @@ def main():
                 except OSError:
                     continue
                 if text:
-                    msgs.append(text)
+                    msgs.append((addr, text))
     if not msgs:
         return
+    try:
+        import time
+        with open(LOG, "a", encoding="utf-8") as fh:
+            for addr, text in msgs:
+                line = " ".join(text.split())[:120]
+                fh.write("{}\t{}\t{}\n".format(int(time.time()), addr, line))
+    except OSError:
+        pass
     ctx = ("Messages delivered via the fleet bus (from other local "
            "sessions or the fleet TUI):\n"
-           + "\n".join(f"- {m}" for m in msgs))
+           + "\n".join(f"- {m}" for _, m in msgs))
     json.dump({"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
         "additionalContext": ctx}}, sys.stdout)
