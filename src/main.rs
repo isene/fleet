@@ -273,6 +273,23 @@ fn main() {
                     }
                 }
             },
+            Some("k") | Some("K") if focus == Focus::Sessions => {
+                if let Some(s) = sess.get(sel_s) {
+                    flash = match s.pid {
+                        Some(pid) => {
+                            let hard = k == Some("K");
+                            let sig = if hard { libc::SIGKILL } else { libc::SIGTERM };
+                            if unsafe { libc::kill(pid as i32, sig) } == 0 {
+                                format!("stopped {} (SIG{})", s.tag,
+                                        if hard { "KILL" } else { "TERM" })
+                            } else {
+                                format!("kill {} failed", s.tag)
+                            }
+                        }
+                        None => format!("{} is already off", s.tag),
+                    };
+                }
+            }
             Some("d") if focus == Focus::Sessions => {
                 if let Some(s) = sess.get(sel_s) {
                     if matches!(s.state, State::Idle | State::Off) {
@@ -623,6 +640,7 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
+    t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
     t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));
     t.push_str(&format!(" {}\n", hdr("INBOX")));
     t.push_str(&format!("{}open the item\n", key("o / Enter")));
@@ -634,7 +652,7 @@ fn help() {
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
-    Popup::centered(50, 16, 231, 236).view(&t);
+    Popup::centered(50, 17, 231, 236).view(&t);
 }
 
 fn draw_footer(cols: u16, rows: u16, focus: Focus,
@@ -649,7 +667,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · d flag · < purge · c today · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · k stop · d flag · < purge · c today · ? help".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge · ? help".to_string(),
         }
     };

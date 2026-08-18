@@ -52,6 +52,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `Enter` on a session: jump to its workspace (xdotool key injection),
   or, when it has no window, resume it in a new glass terminal
 - `m` on a session: type a message, Enter drops it on the bus
+- `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
+  and stays resumable with Enter
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
 - `d` flag for deletion (dark-red row, advances): inbox items, and
