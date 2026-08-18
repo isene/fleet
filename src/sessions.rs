@@ -130,7 +130,18 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             } else if info.last == 'a' {
                 State::Yours
             } else {
-                State::Working
+                // A session that LOOKS working may in fact wait on the
+                // user: sudo below it waits for the fingerprint, and a
+                // pending tool call with no child process for a while is
+                // a permission dialog. Both are YOURS.
+                let kids = pid.map(descendants).unwrap_or_default();
+                if kids.iter().any(|c| c == "sudo") {
+                    State::Yours
+                } else if kids.is_empty() && info.last == 't' && age > 10 {
+                    State::Yours
+                } else {
+                    State::Working
+                }
             };
             let tagged = tags.contains_key(&id);
             let tag = tags.get(&id).cloned().unwrap_or_else(|| {
@@ -319,6 +330,39 @@ pub fn window_ancestor(pid: u32, winmap: &HashMap<u32, u32>) -> Option<u32> {
         }
     }
     None
+}
+
+/// comm names of every descendant process, all threads' children walked.
+/// Only called for the handful of live working sessions per tick.
+fn descendants(pid: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut queue = vec![pid];
+    let mut steps = 0;
+    while let Some(p) = queue.pop() {
+        steps += 1;
+        if steps > 64 {
+            break;
+        }
+        let tasks = match std::fs::read_dir(format!("/proc/{}/task", p)) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        for t in tasks.flatten() {
+            let children = t.path().join("children");
+            let s = std::fs::read_to_string(children).unwrap_or_default();
+            for c in s.split_whitespace() {
+                if let Ok(cp) = c.parse::<u32>() {
+                    let comm =
+                        std::fs::read_to_string(format!("/proc/{}/comm", cp))
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
+                    out.push(comm);
+                    queue.push(cp);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn ppid(pid: u32) -> Option<u32> {
