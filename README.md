@@ -44,13 +44,13 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 ## Keys
 
 - `TAB` switch between sessions and inbox
-- `↑` / `↓` select (shown pointer-style: `→` plus underline)
+- `↑` / `↓` select (shown as a background bar, colors kept)
 - `Enter` on a session: jump to its workspace (xdotool key injection),
   or, when it has no window, resume it in a new glass terminal
 - `m` on a session: type a message, Enter drops it on the bus
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
-- `d` flag an inbox item for deletion (dark-red `D` row, advances)
+- `d` flag an inbox item for deletion (dark-red row, advances)
 - `<` delete all flagged items
 - `?` popup help with all keys
 - `q` quit

@@ -63,11 +63,13 @@ fn clip_end(s: &str, max: usize) -> String {
     }
 }
 
-/// Underline that survives the full resets styled() spans end in: re-arm
-/// after every reset, the way crust's select_bar re-arms reverse. Colors
-/// stay; the underline runs unbroken under them.
-fn underline_keep(s: &str) -> String {
-    format!("\x1b[4m{}\x1b[24m", s.replace("\x1b[0m", "\x1b[0m\x1b[4m"))
+/// Selection bar: a background that survives the full resets styled()
+/// spans end in, re-armed after every reset the way crust's select_bar
+/// re-arms reverse. Foreground colors stay.
+fn bg_keep(s: &str, bg: u8) -> String {
+    let arm = format!("\x1b[48;5;{}m", bg);
+    format!("{}{}\x1b[49m",
+            arm, s.replace("\x1b[0m", &format!("\x1b[0m{}", arm)))
 }
 
 fn clip(s: &str, max: usize) -> String {
@@ -335,13 +337,13 @@ fn ctx_color(k: u64) -> u8 {
 fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel: usize) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
-        "   {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
+        " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
         "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT"
     );
     let mut out = header_bar(&hdr, cols);
     let take = (h as usize).saturating_sub(1).min(sess.len());
     for (i, s) in sess.iter().take(take).enumerate() {
-        let width = (cols as usize).saturating_sub(54);
+        let width = (cols as usize).saturating_sub(52);
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
@@ -357,12 +359,10 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
             style::styled(&clip(&s.model, 8), Some(33), None, "b"),
             clip_end(&s.prompt, width.max(10))
         );
-        // pointer / RTFM style: → prefix + underline marks the selection,
-        // colors kept underneath.
         let line = if focused && i == sel {
-            format!("→ {}", underline_keep(line.trim_end()))
+            bg_keep(line.trim_end(), 238)
         } else {
-            format!("  {}", line)
+            line
         };
         out.push_str(&line);
         out.push('\n');
@@ -374,7 +374,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool, sel
 fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
               focused: bool, sel: usize, marked: &[std::path::PathBuf]) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
-    let hdr = format!("   {:<8}  {:>6}  {}", "INBOX", "AGE", "FILE");
+    let hdr = format!(" {:<8}  {:>6}  {}", "INBOX", "AGE", "FILE");
     let mut out = header_bar(&hdr, cols);
     if items.is_empty() {
         out.push_str(&style::dim("  nothing waiting"));
@@ -385,22 +385,21 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             " {}  {}  {}",
             style::fg(&clip(&it.label, 8), 13),
             style::fg(&format!("{:>6}", fmt_age(it.age_secs)), 242),
-            clip_end(&it.name, (cols as usize).saturating_sub(24).max(10))
+            clip_end(&it.name, (cols as usize).saturating_sub(22).max(10))
         );
-        // Delete-flagged (pointer style): dark-red D prefix + dark-red row;
-        // selection still shows via the underline.
+        // Delete-flagged (pointer style): the whole row dark red;
+        // selection still shows via the bar.
         let line = if marked.contains(&it.path) {
-            let plain = crust::strip_ansi(&line);
-            let body = if focused && i == sel {
-                style::underline(&style::fg(plain.trim_end(), 88))
+            let body = style::fg(crust::strip_ansi(&line).trim_end(), 88);
+            if focused && i == sel {
+                bg_keep(&body, 238)
             } else {
-                style::fg(plain.trim_end(), 88)
-            };
-            format!("{} {}", style::fg("D", 88), body)
+                body
+            }
         } else if focused && i == sel {
-            format!("→ {}", underline_keep(line.trim_end()))
+            bg_keep(line.trim_end(), 238)
         } else {
-            format!("  {}", line)
+            line
         };
         out.push_str(&line);
         out.push('\n');
