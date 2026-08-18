@@ -196,6 +196,9 @@ fn main() {
         }));
         sel_s = sel_s.min(sess.len().saturating_sub(1));
         sel_i = sel_i.min(items.len().saturating_sub(1));
+        if items.is_empty() && focus == Focus::Inbox {
+            focus = Focus::Sessions;   // the last item vanished under us
+        }
 
         let body = rows.saturating_sub(2) as usize;
         let inbox_h = (items.len() + logs.len() + 2).clamp(3, (body / 3).max(3));
@@ -256,7 +259,12 @@ fn main() {
         match k {
             Some("q") | Some("Q") => break,
             Some("TAB") => {
-                focus = if focus == Focus::Sessions { Focus::Inbox } else { Focus::Sessions };
+                // No landing an empty inbox: the selection bar needs a row.
+                if focus == Focus::Sessions && !items.is_empty() {
+                    focus = Focus::Inbox;
+                } else {
+                    focus = Focus::Sessions;
+                }
             }
             Some("UP") => match focus {
                 Focus::Sessions => sel_s = sel_s.saturating_sub(1),
