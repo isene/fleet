@@ -26,10 +26,11 @@ that at a glance, in one TUI.
 - Tag (from [CC-sessions](https://github.com/isene/CC-sessions)
   bookmarks when present, else the project directory name)
 - State: `working` (Claude has the turn), `YOURS` (waiting for you),
+  `CAPPED` (a usage limit refused the model; needs `/model` or credits),
   `idle`, `off` (no process)
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt
-- Sorted so YOURS floats to the top
+- Sorted so CAPPED and YOURS float to the top
 - Bookmarked sessions older than the recent window stay listed at the
   bottom as `older` (dim); unbookmarked old ones are dropped
 
@@ -52,7 +53,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `TAB` switch between sessions and inbox
 - `↑` / `↓` select (shown as a background bar, colors kept)
 - `Enter` on a session: jump to its workspace (xdotool key injection),
-  or, when it has no window, resume it in a new glass terminal
+  or, when it has no window, resume it in a new glass terminal (detached
+  through `setsid`, so it outlives fleet)
 - `m` on a session: type a message, Enter drops it on the bus
 - `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
   and stays resumable with Enter

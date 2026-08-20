@@ -44,6 +44,7 @@ fn fmt_age(s: u64) -> String {
 
 fn state_color(s: State) -> u8 {
     match s {
+        State::Capped => 196,
         State::Working => 46,
         State::Yours => 208,
         State::Idle => 244,
@@ -93,7 +94,7 @@ fn main() {
         println!("  --list     print sessions and inbox as text and exit");
         println!("  --today    print today's token rollup per session and exit");
         println!();
-        println!("Sessions with state (working / YOURS / idle / off), workspace and");
+        println!("Sessions with state (working / YOURS / CAPPED / idle / off), workspace and");
         println!("context size, plus the inbox folders where handoffs land.");
         println!("Config: ~/.fleetrc (see README).");
         return;
@@ -650,7 +651,11 @@ fn which(cmd: &str) -> Option<String> {
 /// Tagged sessions go through `c <tag>` (CC-sessions: path + auto-follow);
 /// untagged ones get a plain resume in their own working directory.
 fn resurrect(s: &Session) -> String {
-    let mut c = Command::new("glass");
+    // Through setsid: the new glass gets its own session and process
+    // group, so quitting fleet (or closing the terminal fleet runs in)
+    // no longer takes the resumed session down with it.
+    let mut c = Command::new("setsid");
+    c.arg("glass");
     if s.tagged {
         let Some(bin) = which("c") else {
             return "session resumer 'c' not in PATH".into();

@@ -15,6 +15,7 @@ const TAIL: u64 = 262144;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum State {
+    Capped,  // refused by a usage limit; needs a model switch or credits
     Working, // Claude has the turn (or a tool is running)
     Yours,   // the answer is in; waiting for the user
     Idle,    // alive but nothing has happened for idle_mins
@@ -25,6 +26,7 @@ pub enum State {
 impl State {
     pub fn label(self) -> &'static str {
         match self {
+            State::Capped => "CAPPED",
             State::Working => "working",
             State::Yours => "YOURS",
             State::Idle => "idle",
@@ -34,11 +36,12 @@ impl State {
     }
     fn rank(self) -> u8 {
         match self {
-            State::Yours => 0,
-            State::Working => 1,
-            State::Idle => 2,
-            State::Off => 3,
-            State::Older => 4,
+            State::Capped => 0,
+            State::Yours => 1,
+            State::Working => 2,
+            State::Idle => 3,
+            State::Off => 4,
+            State::Older => 5,
         }
     }
 }
@@ -63,6 +66,7 @@ pub struct Session {
 #[derive(Clone, Default)]
 struct TailInfo {
     last: char, // 'u' user, 'a' assistant text, 't' assistant tool_use
+    capped: bool, // newest line is a usage-limit refusal from the client
     model: String,
     prompt: String,
     cwd: String,
@@ -125,6 +129,8 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 State::Older
             } else if pid.is_none() {
                 State::Off
+            } else if info.capped {
+                State::Capped
             } else if age > cfg.idle_mins * 60 {
                 State::Idle
             } else if info.last == 'a' {
@@ -212,6 +218,21 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                     .map(|a| a.iter().any(|b| b["type"] == "tool_use"))
                     .unwrap_or(false);
                 info.last = if tools { 't' } else { 'a' };
+                // A client-written refusal ("<synthetic>") ends the
+                // transcript when a usage limit blocks the model. The
+                // session then waits for /model or for credits, which
+                // nothing else in the row would show.
+                if msg["model"].as_str().map(|m| m.starts_with('<')).unwrap_or(false) {
+                    let txt = msg["content"]
+                        .as_array()
+                        .and_then(|a| a.iter().find(|b| b["type"] == "text"))
+                        .and_then(|b| b["text"].as_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    info.capped = txt.contains("usage credits")
+                        || txt.contains("usage limit")
+                        || txt.contains("limit reached");
+                }
             }
             if info.model.is_empty() {
                 if let Some(m) = msg["model"].as_str() {
