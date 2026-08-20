@@ -215,7 +215,12 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
             }
             if info.model.is_empty() {
                 if let Some(m) = msg["model"].as_str() {
-                    info.model = short_model(m);
+                    // "<synthetic>" is a line the client wrote itself (a
+                    // usage-limit refusal, an interrupt notice). No model
+                    // served it, so keep looking for the one that did.
+                    if !m.starts_with('<') {
+                        info.model = short_model(m);
+                    }
                 }
             }
             if info.ctx_k.is_none() {

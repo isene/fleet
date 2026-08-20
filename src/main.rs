@@ -147,6 +147,10 @@ fn main() {
     let mut focus = Focus::Sessions;
     let mut sel_s = 0usize;
     let mut sel_i = 0usize;
+    // The selected session's transcript path. The list re-sorts on every
+    // pass (state rank, then age), so a bare index drifts onto a different
+    // session between redraws and Enter then jumps to the wrong one.
+    let mut sel_path: Option<std::path::PathBuf> = None;
     let mut marked: Vec<std::path::PathBuf> = Vec::new();
     let mut marked_s: Vec<std::path::PathBuf> = Vec::new();
     let mut flash = String::new();
@@ -194,6 +198,13 @@ fn main() {
             &s.path == p
                 && matches!(s.state, State::Idle | State::Off | State::Older)
         }));
+        // Follow the selected session to its new row. Gone (or nothing
+        // selected yet) falls back to the index, clamped below.
+        if let Some(p) = &sel_path {
+            if let Some(i) = sess.iter().position(|s| &s.path == p) {
+                sel_s = i;
+            }
+        }
         sel_s = sel_s.min(sess.len().saturating_sub(1));
         sel_i = sel_i.min(items.len().saturating_sub(1));
         if items.is_empty() && focus == Focus::Inbox {
@@ -399,6 +410,7 @@ fn main() {
             }
             _ => {}
         }
+        sel_path = sess.get(sel_s).map(|s| s.path.clone());
     }
     Crust::cleanup();
 }
