@@ -60,6 +60,9 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   and stays resumable with Enter
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
+- `<` on a `msg` row: clear that message. Delivery clears the rest by
+  itself, so this is for one nothing will collect: a wrong tag, a
+  session that is gone, or something you handled another way
 - `d` flag for deletion (dark-red row, advances): inbox items, and
   idle/off sessions (transcript plus its subagent sidecar)
 - `<` delete everything flagged

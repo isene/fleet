@@ -18,6 +18,9 @@ pub struct LogEntry {
     pub dest: String,
     pub text: String,
     pub ts: u64,
+    /// The mailbox file, for rows that still have one. Delivered traffic
+    /// in the log popup has none: the file is gone by then.
+    pub path: Option<PathBuf>,
 }
 
 /// Messages sitting in the bus and relay mailboxes, not yet delivered.
@@ -62,7 +65,7 @@ pub fn pending() -> Vec<LogEntry> {
                     .chars()
                     .take(120)
                     .collect();
-                out.push(LogEntry { dest: dest.clone(), text, ts });
+                out.push(LogEntry { dest: dest.clone(), text, ts, path: Some(p) });
             }
         }
     }
@@ -86,7 +89,7 @@ pub fn log_tail(n: usize) -> Vec<LogEntry> {
             let ts: u64 = f.next()?.parse().ok()?;
             let dest = f.next()?.to_string();
             let text = f.next()?.to_string();
-            Some(LogEntry { dest, text, ts })
+            Some(LogEntry { dest, text, ts, path: None })
         })
         .collect()
 }

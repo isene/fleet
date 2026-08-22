@@ -218,8 +218,8 @@ fn main() {
             }
         }
         sel_s = sel_s.min(sess.len().saturating_sub(1));
-        sel_i = sel_i.min(items.len().saturating_sub(1));
-        if items.is_empty() && focus == Focus::Inbox {
+        sel_i = sel_i.min((items.len() + logs.len()).saturating_sub(1));
+        if items.is_empty() && logs.is_empty() && focus == Focus::Inbox {
             focus = Focus::Sessions;   // the last item vanished under us
         }
 
@@ -283,7 +283,7 @@ fn main() {
             Some("q") | Some("Q") => break,
             Some("TAB") => {
                 // No landing an empty inbox: the selection bar needs a row.
-                if focus == Focus::Sessions && !items.is_empty() {
+                if focus == Focus::Sessions && !(items.is_empty() && logs.is_empty()) {
                     focus = Focus::Inbox;
                 } else {
                     focus = Focus::Sessions;
@@ -300,7 +300,7 @@ fn main() {
                     }
                 }
                 Focus::Inbox => {
-                    if sel_i + 1 < items.len() {
+                    if sel_i + 1 < items.len() + logs.len() {
                         sel_i += 1;
                     }
                 }
@@ -374,6 +374,20 @@ fn main() {
                     if sel_i + 1 < items.len() {
                         sel_i += 1; // flag-and-advance, pointer style
                     }
+                }
+            }
+            Some("<") if focus == Focus::Inbox && sel_i >= items.len() => {
+                // A message the receiving session will never take (wrong
+                // tag, session gone, or you dealt with it another way).
+                // Delivery clears the rest on its own.
+                match logs.get(sel_i - items.len()).and_then(|e| e.path.as_ref()) {
+                    Some(p) => {
+                        flash = match std::fs::remove_file(p) {
+                            Ok(()) => "message cleared".into(),
+                            Err(e) => format!("could not clear it: {}", e),
+                        };
+                    }
+                    None => flash = "that row has no message file".into(),
                 }
             }
             Some("<") => {
@@ -613,7 +627,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let room = (h as usize).saturating_sub(1 + take);
-    for e in logs.iter().take(room) {
+    for (n, e) in logs.iter().take(room).enumerate() {
         let width = (cols as usize)
             .saturating_sub(26 + e.dest.chars().count())
             .max(10);
@@ -624,7 +638,12 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             e.dest,
             clip_end(&e.text, width)
         );
-        out.push_str(&style::fg(&line, 245));
+        let row = style::fg(&line, 245);
+        if focused && sel == take + n {
+            out.push_str(&bg_keep(row.trim_end(), 238));
+        } else {
+            out.push_str(&row);
+        }
         out.push('\n');
     }
     pane.set_text(out.trim_end_matches('\n'));
@@ -775,6 +794,7 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("INBOX")));
     t.push_str(&format!("{}open the item\n", key("o / Enter")));
     t.push_str(&format!("{}flag the item for deletion\n", key("d")));
+    t.push_str(&format!("{}on a msg row: clear that message\n", key("<")));
     t.push_str(&format!(" {}\n", hdr("GLOBAL")));
     t.push_str(&format!("{}switch sessions / inbox\n", key("TAB")));
     t.push_str(&format!("{}select\n", key("↑ ↓")));
@@ -799,7 +819,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
     } else {
         match focus {
             Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · k stop · d flag · < purge · c today · ? help".to_string(),
-            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge · M log · ? help".to_string(),
+            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge/clear msg · M log · ? help".to_string(),
         }
     };
     let right = format!("fleet v{} ", VERSION);
