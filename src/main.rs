@@ -139,6 +139,17 @@ fn main() {
         for i in inbox::scan(&cfg) {
             println!("inbox {:<8} {:>6} {}", i.label, fmt_age(i.age_secs), i.name);
         }
+        // Messages still waiting on the bus, the same rows the TUI's
+        // INBOX pane shows. Without these, --list looks empty while a
+        // message from the phone sits undelivered.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        for l in inbox::pending() {
+            println!("msg   {:<8} {:>6} {}", l.dest,
+                     fmt_age(now.saturating_sub(l.ts)), l.text);
+        }
         return;
     }
 

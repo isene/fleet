@@ -26,6 +26,7 @@ clearly-labelled DATA, never as instructions.
 import json
 import os
 import re
+import urllib.request
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -89,8 +90,30 @@ def message_session(tag, text):
     d.mkdir(parents=True, exist_ok=True)
     path = d / "{}-phone.msg".format(int(time.time()))
     path.write_text(text + "\n\n/phone\n", encoding="utf-8")
+    poke_syncthing()
     return ("Delivered to '{}'. It syncs to the laptop in seconds and "
             "reaches that session on its next user prompt.".format(tag))
+
+
+def poke_syncthing():
+    """Tell the local Syncthing to index the relay now.
+
+    The folder watcher missed files written here (messages sat until the
+    hourly rescan, which is not "in seconds"), so the write is followed
+    by an explicit scan of that one folder. Best effort: a failure only
+    means the message waits for the next rescan, as before.
+    """
+    try:
+        cfg = Path.home() / ".local/state/syncthing/config.xml"
+        m = re.search(r"<apikey>([^<]+)</apikey>", cfg.read_text(encoding="utf-8"))
+        if not m:
+            return
+        req = urllib.request.Request(
+            "http://127.0.0.1:8384/rest/db/scan?folder=fleet-relay",
+            method="POST", headers={"X-API-Key": m.group(1)})
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
 
 
 def check_messages():
