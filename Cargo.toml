@@ -1,6 +1,6 @@
 [package]
 name = "fleet"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 authors = ["Geir Isene <g@isene.com>"]
 description = "Claude Code mission control: live session states, workspace attribution, and inbox watch (scrots, phone transfers). Part of the Fe2O3 Rust terminal suite."

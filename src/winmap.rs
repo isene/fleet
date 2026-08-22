@@ -58,13 +58,21 @@ impl WinMap {
             Some(v) if !v.is_empty() => v,
             _ => self.query_tree_root(),
         };
-        for w in windows {
-            let pid = self
-                .get_atom_array(w, self.atom_wm_pid, AtomEnum::CARDINAL.into())
-                .and_then(|v| v.first().copied());
-            let desk = self
-                .get_atom_array(w, self.atom_wm_desktop, AtomEnum::CARDINAL.into())
-                .and_then(|v| v.first().copied());
+        // Ask for everything first, then read the answers. Asking and
+        // waiting per window costs two blocking round trips each, which
+        // is ~370 wakeups per pass on a busy desktop; queued this way it
+        // is one flush and one stream of replies.
+        let mut cookies = Vec::with_capacity(windows.len());
+        for w in &windows {
+            let pid = self.conn.get_property(
+                false, *w, self.atom_wm_pid, AtomEnum::CARDINAL, 0, 1024);
+            let desk = self.conn.get_property(
+                false, *w, self.atom_wm_desktop, AtomEnum::CARDINAL, 0, 1024);
+            cookies.push((pid, desk));
+        }
+        for (pid_c, desk_c) in cookies {
+            let pid = first_card(pid_c);
+            let desk = first_card(desk_c);
             if let Some(p) = pid {
                 // Multi-window apps (Firefox spawns ~8 hidden helpers
                 // sharing the same _NET_WM_PID) confuse a naive
@@ -115,6 +123,18 @@ impl WinMap {
                 .collect(),
         )
     }
+}
+
+/// First CARDINAL of a queued GetProperty reply, or None for anything
+/// that did not come back as a 32-bit property.
+fn first_card<C>(cookie: Result<x11rb::cookie::Cookie<'_, RustConnection,
+        x11rb::protocol::xproto::GetPropertyReply>, C>) -> Option<u32> {
+    let reply = cookie.ok()?.reply().ok()?;
+    if reply.format != 32 {
+        return None;
+    }
+    reply.value.chunks_exact(4).next()
+        .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
 }
 
 fn intern(conn: &RustConnection, name: &[u8]) -> Option<Atom> {

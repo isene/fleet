@@ -75,18 +75,47 @@ struct TailInfo {
 
 pub struct Cache {
     tails: HashMap<PathBuf, (SystemTime, TailInfo)>,
+    /// The last full /proc sweep, and when it ran. Sweeping every pass
+    /// costs one comm read per process on the machine, ~400 of them
+    /// every two seconds, to notice a session that starts once an hour.
+    procs: HashMap<String, u32>,
+    procs_at: SystemTime,
 }
 
 impl Cache {
     pub fn new() -> Cache {
-        Cache { tails: HashMap::new() }
+        Cache {
+            tails: HashMap::new(),
+            procs: HashMap::new(),
+            procs_at: SystemTime::UNIX_EPOCH,
+        }
     }
 }
+
+/// How stale the process map may get. A session that starts is noticed
+/// within this; one that dies is noticed at once, since the cheap check
+/// below stats each known pid every pass.
+const PROC_SWEEP_SECS: u64 = 10;
 
 pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
     let now = SystemTime::now();
     let tags = load_tags();
-    let procs = claude_procs();
+    let procs = {
+        let stale = now.duration_since(cache.procs_at)
+            .map(|d| d.as_secs() >= PROC_SWEEP_SECS)
+            .unwrap_or(true);
+        if stale {
+            cache.procs = claude_procs();
+            cache.procs_at = now;
+        } else {
+            // Between sweeps, only drop the ones that have gone: one
+            // stat per known session, not one read per process alive.
+            cache.procs.retain(|_, pid| {
+                Path::new(&format!("/proc/{}", pid)).exists()
+            });
+        }
+        cache.procs.clone()
+    };
     let mut out = Vec::new();
     let projects = home().join(".claude/projects");
     let dirs = match std::fs::read_dir(&projects) {
