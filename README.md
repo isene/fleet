@@ -121,9 +121,19 @@ home directory, phone items in `~/.transfer`.
 
 A 2 second tick while open, nothing after `q`. Each tick is one `stat`
 per session file (transcript tails are re-read only when mtime
-changed), one `readdir` per inbox folder, and one `/proc` sweep for
-claude pids. The token rollup reads whole transcripts, so it runs only
-on demand (`c` or `--today`), never on the tick.
+changed) and one `readdir` per inbox folder. The token rollup reads
+whole transcripts, so it runs only on demand (`c` or `--today`), never
+on the tick.
+
+Two costs were measured and cut, from 170 wakeups a second to 21:
+
+- The workspace map asked X for two properties per window and waited for
+  each answer, ~370 blocking round trips a tick on a busy desktop. The
+  requests are queued now, and the replies read in one pass.
+- The `/proc` sweep for claude pids reads one `comm` per process on the
+  machine. It runs every 10 seconds now; in between, each known pid is
+  checked with a single `stat`, so a session that ends still drops out
+  at once and one that starts appears within ten seconds.
 
 ## License
 
