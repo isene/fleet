@@ -49,7 +49,7 @@ fn state_color(s: State) -> u8 {
         State::Capped => 196,
         State::Working => 46,
         State::Yours => 208,
-        State::Idle => 68,    // alive but quiet: blue, never one of the greys
+        State::Idle => 69,    // alive but quiet: blue, never one of the greys
         State::Off => 60,
         State::Older => 240, // darker than off, but never the bar's 238
     }
