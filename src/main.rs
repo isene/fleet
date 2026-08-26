@@ -313,9 +313,18 @@ fn main() {
                         // Same workspace: injecting tile's hotkey would
                         // TOGGLE to the previous workspace, so don't.
                         let cur = wm.as_ref().and_then(|w| w.current_desktop());
+                        // Raise this session's own tab first: it may be
+                        // one of several full-screen glasses stacked on
+                        // the workspace, so switching there is not enough.
+                        if let (Some(wmc), Some(pid)) = (wm.as_ref(), s.pid) {
+                            let pw = wmc.pid_windows();
+                            if let Some(xid) = sessions::window_ancestor(pid, &pw) {
+                                wmc.activate(xid);
+                            }
+                        }
                         flash = match s.ws {
                             Some(w) if Some(w) == cur => {
-                                format!("{} is on this workspace", s.tag)
+                                format!("→ {} raised", s.tag)
                             }
                             Some(w) => jump(&s.tag, w),
                             None => resurrect(s, cfg.session_prefs.get(&s.tag)),

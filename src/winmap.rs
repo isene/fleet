@@ -8,7 +8,9 @@
 
 use std::collections::HashMap;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt as _};
+use x11rb::protocol::xproto::{
+    Atom, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask,
+};
 use x11rb::rust_connection::RustConnection;
 
 pub struct WinMap {
@@ -18,6 +20,7 @@ pub struct WinMap {
     atom_wm_pid: Atom,
     atom_wm_desktop: Atom,
     atom_current_desktop: Atom,
+    atom_active: Atom,
 }
 
 impl WinMap {
@@ -29,6 +32,7 @@ impl WinMap {
         let atom_wm_pid = intern(&conn, b"_NET_WM_PID")?;
         let atom_wm_desktop = intern(&conn, b"_NET_WM_DESKTOP")?;
         let atom_current_desktop = intern(&conn, b"_NET_CURRENT_DESKTOP")?;
+        let atom_active = intern(&conn, b"_NET_ACTIVE_WINDOW")?;
         Some(WinMap {
             conn,
             root,
@@ -36,6 +40,7 @@ impl WinMap {
             atom_wm_pid,
             atom_wm_desktop,
             atom_current_desktop,
+            atom_active,
         })
     }
 
@@ -92,6 +97,43 @@ impl WinMap {
             }
         }
         out
+    }
+
+    /// {pid → window xid}, one window per pid (first seen). Same source
+    /// as refresh(), but keeps the window instead of its desktop, so a
+    /// caller can raise a specific session's tab.
+    pub fn pid_windows(&self) -> HashMap<u32, u32> {
+        let mut out = HashMap::new();
+        let windows = match self.get_atom_array(
+            self.root, self.atom_client_list, AtomEnum::WINDOW.into()) {
+            Some(v) if !v.is_empty() => v,
+            _ => self.query_tree_root(),
+        };
+        let mut cookies = Vec::with_capacity(windows.len());
+        for w in &windows {
+            let pid = self.conn.get_property(
+                false, *w, self.atom_wm_pid, AtomEnum::CARDINAL, 0, 1024);
+            cookies.push((*w, pid));
+        }
+        for (w, pid_c) in cookies {
+            if let Some(p) = first_card(pid_c) {
+                out.entry(p).or_insert(w);
+            }
+        }
+        out
+    }
+
+    /// Show and focus a window: the EWMH _NET_ACTIVE_WINDOW ClientMessage
+    /// on the root. tile raises the window's tab on its workspace, and
+    /// focuses it when that is the current workspace.
+    pub fn activate(&self, xid: u32) {
+        let ev = ClientMessageEvent::new(32, xid, self.atom_active, [2u32, 0, 0, 0, 0]);
+        let _ = self.conn.send_event(
+            false, self.root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            ev,
+        );
+        let _ = self.conn.flush();
     }
 
     fn query_tree_root(&self) -> Vec<u32> {

@@ -52,7 +52,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 
 - `TAB` switch between sessions and inbox
 - `↑` / `↓` select (shown as a background bar, colors kept)
-- `Enter` on a session: jump to its workspace (xdotool key injection),
+- `Enter` on a session: raise its own glass (one of several stacked on
+  a workspace) and jump to that workspace (xdotool key injection),
   or, when it has no window, resume it in a new glass terminal (detached
   through `setsid`, so it outlives fleet)
 - `m` on a session: type a message, Enter drops it on the bus
