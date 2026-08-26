@@ -106,7 +106,7 @@ fn main() {
         return;
     }
 
-    let cfg = Config::load();
+    let mut cfg = Config::load();
     let mut cache = Cache::new();
 
     if std::env::args().skip(1).any(|a| a == "--today") {
@@ -318,7 +318,7 @@ fn main() {
                                 format!("{} is on this workspace", s.tag)
                             }
                             Some(w) => jump(&s.tag, w),
-                            None => resurrect(s),
+                            None => resurrect(s, cfg.session_prefs.get(&s.tag)),
                         };
                     }
                 }
@@ -424,6 +424,77 @@ fn main() {
                     let addr = if s.tagged { s.tag.clone() } else { s.id.clone() };
                     msg_to = Some((addr, s.tag.clone()));
                     msg_buf.clear();
+                }
+            }
+            Some("w") if focus == Focus::Sessions => {
+                // Set the workspace this session's glass opens on.
+                if let Some(s) = sess.get(sel_s) {
+                    let tag = s.tag.clone();
+                    let mut p = Pane::new(1, rows, cols, 1, 231, 236);
+                    let ans = p.ask_or_cancel(
+                        &format!("workspace for {} (1-10, - = none): ", tag), "");
+                    if let Some(a) = ans {
+                        let a = a.trim();
+                        let mut pref =
+                            cfg.session_prefs.get(&tag).cloned().unwrap_or_default();
+                        let ok = if a == "-" || a.is_empty() {
+                            pref.ws = None;
+                            true
+                        } else if let Ok(n) = a.parse::<u32>() {
+                            if (1..=10).contains(&n) {
+                                pref.ws = Some(n - 1);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if ok {
+                            config::write_session_pref(&tag, &pref);
+                            cfg = Config::load();
+                            flash = match pref.ws {
+                                Some(w) => format!("{} opens on ws {}", tag, w + 1),
+                                None => format!("{}: workspace cleared", tag),
+                            };
+                        } else {
+                            flash = "workspace must be 1-10 (or -)".into();
+                        }
+                    }
+                }
+            }
+            Some("b") if focus == Focus::Sessions => {
+                // Pick this session's glass background with prism. prism
+                // writes the hex to --out so its TUI keeps the terminal.
+                if let Some(s) = sess.get(sel_s) {
+                    let tag = s.tag.clone();
+                    let out = std::env::temp_dir()
+                        .join(format!("fleet-prism-{}", std::process::id()));
+                    Crust::cleanup();
+                    let _ = Command::new("prism")
+                        .args(["--pick", "--hex", &format!("--out={}", out.display())])
+                        .status();
+                    Crust::init();
+                    Crust::clear_screen();
+                    let (c, r) = Crust::terminal_size();
+                    cols = c;
+                    rows = r;
+                    let hex = std::fs::read_to_string(&out)
+                        .ok()
+                        .map(|s| s.trim().trim_start_matches('#').to_lowercase())
+                        .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_hexdigit()));
+                    let _ = std::fs::remove_file(&out);
+                    let mut pref =
+                        cfg.session_prefs.get(&tag).cloned().unwrap_or_default();
+                    match hex {
+                        Some(h) => {
+                            pref.bg = Some(h.clone());
+                            config::write_session_pref(&tag, &pref);
+                            cfg = Config::load();
+                            flash = format!("{} bg set to #{}", tag, h);
+                        }
+                        None => flash = "no colour picked".into(),
+                    }
                 }
             }
             Some("c") => {
@@ -682,12 +753,26 @@ fn which(cmd: &str) -> Option<String> {
 /// A session with no window on this display: resume it in a fresh glass.
 /// Tagged sessions go through `c <tag>` (CC-sessions: path + auto-follow);
 /// untagged ones get a plain resume in their own working directory.
-fn resurrect(s: &Session) -> String {
+fn resurrect(s: &Session, pref: Option<&config::SessionPref>) -> String {
+    // Open on the tag's configured workspace: switch there first so tile
+    // maps the new glass on it (tile places new windows on the current
+    // workspace). No-op when the tag has no workspace set.
+    if let Some(ws) = pref.and_then(|p| p.ws) {
+        let _ = Command::new("xdotool")
+            .args(["key", &format!("super+{}", ws + 1)])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     // Through setsid: the new glass gets its own session and process
     // group, so quitting fleet (or closing the terminal fleet runs in)
     // no longer takes the resumed session down with it.
     let mut c = Command::new("setsid");
     c.arg("glass");
+    // Per-session background: glass reads GLASS_BG and overrides .glassrc.
+    if let Some(bg) = pref.and_then(|p| p.bg.as_ref()) {
+        c.env("GLASS_BG", bg);
+    }
     if s.tagged {
         let Some(bin) = which("c") else {
             return "session resumer 'c' not in PATH".into();
@@ -791,6 +876,8 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
+    t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
+    t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));
     t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
     t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));
     t.push_str(&format!(" {}\n", hdr("INBOX")));

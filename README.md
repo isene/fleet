@@ -56,6 +56,10 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   or, when it has no window, resume it in a new glass terminal (detached
   through `setsid`, so it outlives fleet)
 - `m` on a session: type a message, Enter drops it on the bus
+- `w` on a session: set the workspace its glass opens on (1-10, `-`
+  clears). Saved to `~/.fleetrc`, applied next time you resume it
+- `b` on a session: pick its glass background with `prism`. Saved to
+  `~/.fleetrc`, applied next resume via the `GLASS_BG` env
 - `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
   and stays resumable with Enter
 - `c` today's token rollup per session (Esc back)
@@ -112,10 +116,20 @@ inbox phone  ~/.transfer *
 recent_days 7      # sessions younger than this are listed
 idle_mins 30       # older than this and a live session shows "idle"
 inbox_days 3       # inbox items younger than this are shown
+
+# session <tag> <ws> [bg]   where a resumed session's glass opens.
+#   ws is 1-based (- for none); bg is BARE hex, no leading # (the file
+#   reads # as a comment). Set both live from the TUI with w and b.
+session system 1
+session asm    2
+session rust   3
+session DI     6 1a1a2e
 ```
 
-The defaults are exactly the block above: laptop screenshots in the
-home directory, phone items in `~/.transfer`.
+The defaults are the inbox/recent/idle/inbox_days block above: laptop
+screenshots in the home directory, phone items in `~/.transfer`. The
+`session` lines are per-machine and easiest to set with `w` / `b` in
+the TUI.
 
 ## Battery posture
 
