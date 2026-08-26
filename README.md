@@ -56,10 +56,12 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   or, when it has no window, resume it in a new glass terminal (detached
   through `setsid`, so it outlives fleet)
 - `m` on a session: type a message, Enter drops it on the bus
-- `w` on a session: set the workspace its glass opens on (1-10, `-`
-  clears). Saved to `~/.fleetrc`, applied next time you resume it
-- `b` on a session: pick its glass background with `prism`. Saved to
-  `~/.fleetrc`, applied next resume via the `GLASS_BG` env
+- `w` on a session: set the workspace its glass opens on (1-9, `0` for
+  10, `-` clears). The prompt is prefilled with the current value.
+  Saved to `~/.fleetrc`, applied next time you resume it
+- `b` on a session: pick its glass background with `prism`, preloaded
+  with the current colour. Saved to `~/.fleetrc`, applied next resume
+  via the `GLASS_BG` env
 - `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
   and stays resumable with Enter
 - `c` today's token rollup per session (Esc back)

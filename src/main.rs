@@ -427,21 +427,26 @@ fn main() {
                 }
             }
             Some("w") if focus == Focus::Sessions => {
-                // Set the workspace this session's glass opens on.
+                // Set the workspace this session's glass opens on. The
+                // prompt is prefilled with the current value.
                 if let Some(s) = sess.get(sel_s) {
                     let tag = s.tag.clone();
+                    let mut pref =
+                        cfg.session_prefs.get(&tag).cloned().unwrap_or_default();
+                    let init = pref.ws.map(|w| (w + 1).to_string()).unwrap_or_default();
                     let mut p = Pane::new(1, rows, cols, 1, 231, 236);
                     let ans = p.ask_or_cancel(
-                        &format!("workspace for {} (1-10, - = none): ", tag), "");
+                        &format!("workspace for {} (1-9, 0=10, - none): ", tag), &init);
                     if let Some(a) = ans {
                         let a = a.trim();
-                        let mut pref =
-                            cfg.session_prefs.get(&tag).cloned().unwrap_or_default();
                         let ok = if a == "-" || a.is_empty() {
                             pref.ws = None;
                             true
                         } else if let Ok(n) = a.parse::<u32>() {
-                            if (1..=10).contains(&n) {
+                            if n == 0 {
+                                pref.ws = Some(9); // 0 = workspace 10
+                                true
+                            } else if (1..=10).contains(&n) {
                                 pref.ws = Some(n - 1);
                                 true
                             } else {
@@ -458,7 +463,7 @@ fn main() {
                                 None => format!("{}: workspace cleared", tag),
                             };
                         } else {
-                            flash = "workspace must be 1-10 (or -)".into();
+                            flash = "workspace must be 1-10 (0=10, or -)".into();
                         }
                     }
                 }
@@ -470,10 +475,19 @@ fn main() {
                     let tag = s.tag.clone();
                     let out = std::env::temp_dir()
                         .join(format!("fleet-prism-{}", std::process::id()));
+                    // Preload prism with the current colour so it shows
+                    // what is already set.
+                    let cur_bg = cfg.session_prefs.get(&tag).and_then(|pf| pf.bg.clone());
+                    let mut args = vec![
+                        "--pick".to_string(),
+                        "--hex".to_string(),
+                        format!("--out={}", out.display()),
+                    ];
+                    if let Some(b) = &cur_bg {
+                        args.push(format!("#{}", b));
+                    }
                     Crust::cleanup();
-                    let _ = Command::new("prism")
-                        .args(["--pick", "--hex", &format!("--out={}", out.display())])
-                        .status();
+                    let _ = Command::new("prism").args(&args).status();
                     Crust::init();
                     Crust::clear_screen();
                     let (c, r) = Crust::terminal_size();
@@ -726,7 +740,8 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
 /// Switch to the session's workspace by injecting tile's own hotkey
 /// (frame supports XTEST). Falls back to naming the workspace.
 fn jump(tag: &str, ws: u32) -> String {
-    let key = format!("super+{}", ws + 1);
+    // tile binds Mod4+0 to workspace 10, Mod4+1..9 to the rest.
+    let key = if ws == 9 { "super+0".to_string() } else { format!("super+{}", ws + 1) };
     match Command::new("xdotool")
         .args(["key", &key])
         .stdout(Stdio::null())
@@ -758,8 +773,10 @@ fn resurrect(s: &Session, pref: Option<&config::SessionPref>) -> String {
     // maps the new glass on it (tile places new windows on the current
     // workspace). No-op when the tag has no workspace set.
     if let Some(ws) = pref.and_then(|p| p.ws) {
+        // tile binds Mod4+0 to workspace 10, Mod4+1..9 to the rest.
+        let key = if ws == 9 { "super+0".to_string() } else { format!("super+{}", ws + 1) };
         let _ = Command::new("xdotool")
-            .args(["key", &format!("super+{}", ws + 1)])
+            .args(["key", &key])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
