@@ -493,9 +493,15 @@ fn main() {
                     let (c, r) = Crust::terminal_size();
                     cols = c;
                     rows = r;
+                    // prism writes "fg=#RRGGBB\nbg=#RRGGBB"; the picked
+                    // colour is the fg slot.
                     let hex = std::fs::read_to_string(&out)
                         .ok()
-                        .map(|s| s.trim().trim_start_matches('#').to_lowercase())
+                        .and_then(|s| {
+                            s.lines()
+                                .find_map(|l| l.strip_prefix("fg="))
+                                .map(|h| h.trim().trim_start_matches('#').to_lowercase())
+                        })
                         .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_hexdigit()));
                     let _ = std::fs::remove_file(&out);
                     let mut pref =
