@@ -57,6 +57,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   or, when it has no window, resume it in a new glass terminal (detached
   through `setsid`, so it outlives fleet)
 - `m` on a session: type a message, Enter drops it on the bus
+- `y` on a session: copy its session id to the clipboard, to hand another
+  Claude session so it can read what happened there
 - `w` on a session: set the workspace its glass opens on (1-9, `0` for
   10, `-` clears). The prompt is prefilled with the current value.
   Saved to `~/.fleetrc`, applied next time you resume it

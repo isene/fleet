@@ -437,6 +437,14 @@ fn main() {
                     msg_buf.clear();
                 }
             }
+            Some("y") if focus == Focus::Sessions => {
+                // Copy the session id, to hand another CC session so it
+                // can read this one's transcript ("what happened in ...").
+                if let Some(s) = sess.get(sel_s) {
+                    crust::clipboard_copy(&s.id, "clipboard");
+                    flash = format!("copied {} ({})", s.id, s.tag);
+                }
+            }
             Some("w") if focus == Focus::Sessions => {
                 // Set the workspace this session's glass opens on. The
                 // prompt is prefilled with the current value.
@@ -918,6 +926,7 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
+    t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));
     t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
