@@ -5,7 +5,7 @@
 //!   idle_mins N                    older than this and a session is "idle"
 //!   inbox_days N                   inbox items younger than this are shown
 //!   ctx_window_k N                 context window in k tokens (default 1000);
-//!                                  CTX turns yellow at 50 % and red at 80 %
+//!                                  CTX turns yellow at 50 % and red at 75 %
 //!                                  of it, like the CC statusline
 //!   session <tag> <ws> [bg]        where a resumed session's glass opens
 //!                                  (ws is 1-based, or '-' for none; bg is

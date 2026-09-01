@@ -80,7 +80,7 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 
 Colors follow the Claude Code statusline: bookmark tags magenta, model
 bold blue, ages gray, and context size on the statusline's own scale:
-green under 50 % of the window, yellow under 80 %, red above.
+green under 50 % of the window, yellow under 75 %, red above.
 
 `fleet --list` prints sessions and inbox as plain text; `fleet --today`
 prints the rollup. Both exit immediately.
@@ -120,7 +120,7 @@ inbox phone  ~/.transfer *
 recent_days 7      # sessions younger than this are listed
 idle_mins 30       # older than this and a live session shows "idle"
 inbox_days 3       # inbox items younger than this are shown
-ctx_window_k 1000  # context window; CTX goes yellow at 50 %, red at 80 %
+ctx_window_k 1000  # context window; CTX goes yellow at 50 %, red at 75 %
 
 # session <tag> <ws> [bg]   where a resumed session's glass opens.
 #   ws is 1-based (- for none); bg is BARE hex, no leading # (the file

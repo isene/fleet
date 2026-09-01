@@ -638,11 +638,11 @@ fn header_bar(text: &str, cols: u16) -> String {
 }
 
 /// Context size coloring, identical to the CC statusline's [NN%]: green
-/// under 50 % of the window, yellow under 80 %, red 203 above. The window
+/// under 50 % of the window, yellow under 75 %, red 203 above. The window
 /// is ~/.fleetrc ctx_window_k (default 1000).
 fn ctx_color(k: u64, window_k: u64) -> u8 {
     let pct = k * 100 / window_k.max(1);
-    if pct < 50 { 78 } else if pct < 80 { 220 } else { 203 }
+    if pct < 50 { 78 } else if pct < 75 { 220 } else { 203 }
 }
 
 fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
