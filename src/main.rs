@@ -336,6 +336,7 @@ fn main() {
                     if let Some(i) = items.get(sel_i) {
                         let _ = Command::new("xdg-open")
                             .arg(&i.path)
+                            .stdin(Stdio::null())   // same pty leak as resurrect
                             .stdout(Stdio::null())
                             .stderr(Stdio::null())
                             .spawn();
@@ -824,7 +825,11 @@ fn resurrect(s: &Session, pref: Option<&config::SessionPref>) -> String {
             c.current_dir(&s.cwd);
         }
     }
-    match c.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+    // stdin too: a child that inherits fleet's pty keeps it open for its
+    // whole life, and glass only ends when the pty hangs up. With an
+    // inherited stdin, quitting fleet left its glass black until every
+    // session resumed from it had ended.
+    match c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(_) => format!("resuming {} in a new glass", s.tag),
         Err(e) => format!("glass failed: {}", e),
     }
