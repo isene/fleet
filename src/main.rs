@@ -235,7 +235,8 @@ fn main() {
             draw_rollup(cols, 2, body as u16, rows_r);
         } else {
             draw_sessions(cols, 2, sess_h as u16, &sess,
-                          focus == Focus::Sessions, sel_s, &marked_s);
+                          focus == Focus::Sessions, sel_s, &marked_s,
+                          cfg.ctx_window_k);
             draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
                        focus == Focus::Inbox, sel_i, &marked, &logs);
         }
@@ -636,13 +637,16 @@ fn header_bar(text: &str, cols: u16) -> String {
     format!("{}\n", style::styled(&s, Some(250), Some(236), "b"))
 }
 
-/// Context size coloring: the statusline's green / yellow / red family.
-fn ctx_color(k: u64) -> u8 {
-    if k < 150 { 78 } else if k < 400 { 220 } else { 196 }
+/// Context size coloring, identical to the CC statusline's [NN%]: green
+/// under 50 % of the window, yellow under 80 %, red 203 above. The window
+/// is ~/.fleetrc ctx_window_k (default 1000).
+fn ctx_color(k: u64, window_k: u64) -> u8 {
+    let pct = k * 100 / window_k.max(1);
+    if pct < 50 { 78 } else if pct < 80 { 220 } else { 203 }
 }
 
 fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
-                 sel: usize, marked: &[std::path::PathBuf]) {
+                 sel: usize, marked: &[std::path::PathBuf], window_k: u64) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
         " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
@@ -665,7 +669,8 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
                           if s.state == State::Yours { "b" } else { "" }),
             style::fg(&format!("{:>6}", fmt_age(s.age_secs)), 242),
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
-            style::fg(&format!("{:>5}", ctx), s.ctx_k.map(ctx_color).unwrap_or(242)),
+            style::fg(&format!("{:>5}", ctx),
+                      s.ctx_k.map(|k| ctx_color(k, window_k)).unwrap_or(242)),
             style::styled(&clip(&s.model, 8), Some(33), None, "b"),
             clip_end(&s.prompt, width.max(10))
         );

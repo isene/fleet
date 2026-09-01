@@ -275,8 +275,10 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
             }
             if info.ctx_k.is_none() {
                 let u = &msg["usage"];
+                // Same basis as the CC statusline's percentage: the
+                // prompt side of the window, output tokens excluded.
                 let total = ["input_tokens", "cache_read_input_tokens",
-                             "cache_creation_input_tokens", "output_tokens"]
+                             "cache_creation_input_tokens"]
                     .iter()
                     .filter_map(|k| u[*k].as_u64())
                     .sum::<u64>();

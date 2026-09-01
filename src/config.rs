@@ -4,6 +4,9 @@
 //!   recent_days N                  sessions younger than this are listed
 //!   idle_mins N                    older than this and a session is "idle"
 //!   inbox_days N                   inbox items younger than this are shown
+//!   ctx_window_k N                 context window in k tokens (default 1000);
+//!                                  CTX turns yellow at 50 % and red at 80 %
+//!                                  of it, like the CC statusline
 //!   session <tag> <ws> [bg]        where a resumed session's glass opens
 //!                                  (ws is 1-based, or '-' for none; bg is
 //!                                  the glass background as BARE hex, e.g.
@@ -37,6 +40,7 @@ pub struct Config {
     pub recent_days: u64,
     pub idle_mins: u64,
     pub inbox_days: u64,
+    pub ctx_window_k: u64,
     pub session_prefs: HashMap<String, SessionPref>,
 }
 
@@ -70,6 +74,7 @@ impl Config {
             recent_days: 7,
             idle_mins: 30,
             inbox_days: 3,
+            ctx_window_k: 1000,
             session_prefs: HashMap::new(),
         };
         let mut have_inbox = false;
@@ -88,6 +93,7 @@ impl Config {
                     }
                     ["recent_days", n] => cfg.recent_days = n.parse().unwrap_or(cfg.recent_days),
                     ["idle_mins", n] => cfg.idle_mins = n.parse().unwrap_or(cfg.idle_mins),
+                    ["ctx_window_k", n] => cfg.ctx_window_k = n.parse().unwrap_or(cfg.ctx_window_k),
                     ["inbox_days", n] => cfg.inbox_days = n.parse().unwrap_or(cfg.inbox_days),
                     ["session", tag, ws] => {
                         cfg.session_prefs.insert(tag.to_string(),
