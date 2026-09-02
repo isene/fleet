@@ -658,13 +658,13 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
                  sel: usize, marked: &[std::path::PathBuf], window_k: u64) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
-        " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<8}  {}",
+        " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
         "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT"
     );
     let mut out = header_bar(&hdr, cols);
     let take = (h as usize).saturating_sub(1).min(sess.len());
     for (i, s) in sess.iter().take(take).enumerate() {
-        let width = (cols as usize).saturating_sub(52);
+        let width = (cols as usize).saturating_sub(53);
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
@@ -680,7 +680,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
             style::fg(&format!("{:>5}", ctx),
                       s.ctx_k.map(|k| ctx_color(k, window_k)).unwrap_or(242)),
-            style::styled(&clip(&s.model, 8), Some(33), None, "b"),
+            style::styled(&format!("{:<9}", clip(&s.model, 9)), Some(33), None, "b"),
             clip_end(&s.prompt, width.max(10))
         );
         // Delete-flagged: the whole row dark red, selection via the bar.

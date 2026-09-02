@@ -335,9 +335,25 @@ fn user_text(content: &Value) -> Option<String> {
     Some(clean.chars().take(240).collect())
 }
 
+/// "claude-fable-5-1[1m]" → "Fable 5.1", "claude-haiku-4-5-20251001" → "Haiku 4.5".
 fn short_model(m: &str) -> String {
     let m = m.strip_prefix("claude-").unwrap_or(m);
-    m.split('-').next().unwrap_or(m).to_string()
+    let m = m.split('[').next().unwrap_or(m);
+    let mut parts = m.split('-');
+    let mut name = String::new();
+    let mut chars = parts.next().unwrap_or(m).chars();
+    if let Some(c) = chars.next() {
+        name.extend(c.to_uppercase());
+        name.push_str(chars.as_str());
+    }
+    let ver: Vec<&str> = parts
+        .take_while(|p| p.len() <= 2 && p.bytes().all(|b| b.is_ascii_digit()))
+        .collect();
+    if !ver.is_empty() {
+        name.push(' ');
+        name.push_str(&ver.join("."));
+    }
+    name
 }
 
 /// {session-uuid → pid} for every running `claude --resume <uuid>`.
