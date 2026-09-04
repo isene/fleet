@@ -67,6 +67,7 @@ pub struct Session {
 struct TailInfo {
     last: char, // 'u' user, 'a' assistant text, 't' assistant tool_use
     capped: bool, // newest line is a usage-limit refusal from the client
+    headless: bool, // `claude -p`: entrypoint sdk-cli, no terminal, one prompt
     model: String,
     prompt: String,
     cwd: String,
@@ -153,6 +154,11 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 continue;
             }
             let info = cached_tail(cache, &path, mtime);
+            // A headless run (`claude -p` from a script) is not a session
+            // anyone sits in; twenty of them bury the real list.
+            if info.headless {
+                continue;
+            }
             let pid = procs.get(&id).copied();
             let state = if !recent {
                 State::Older
@@ -238,6 +244,9 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
             if let Some(c) = v["cwd"].as_str() {
                 info.cwd = c.to_string();
             }
+        }
+        if v["entrypoint"] == "sdk-cli" {
+            info.headless = true;
         }
         if typ == "assistant" {
             let msg = &v["message"];
