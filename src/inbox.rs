@@ -16,6 +16,9 @@ pub struct Item {
 
 pub struct LogEntry {
     pub dest: String,
+    /// Sender tag, from the message's trailing `-- <tag>` line. "?" when
+    /// unsigned. Empty for delivered-log rows, whose sender is not kept.
+    pub from: String,
     pub text: String,
     pub ts: u64,
     /// The mailbox file, for rows that still have one. Delivered traffic
@@ -37,13 +40,24 @@ pub fn pending() -> Vec<LogEntry> {
         };
         for d in dirs.flatten() {
             let dest = d.file_name().to_string_lossy().to_string();
+            // Skip Syncthing's own marker dir (.stfolder) and any dotdir.
+            if dest.starts_with('.') {
+                continue;
+            }
             let files = match std::fs::read_dir(d.path()) {
                 Ok(f) => f,
                 Err(_) => continue,
             };
             for f in files.flatten() {
                 let p = f.path();
-                if p.extension().map(|e| e != "msg").unwrap_or(true) {
+                let name = f.file_name().to_string_lossy().to_string();
+                // The bus stores one plain file per message, any name, no
+                // extension (the receiving hook reads them all). Skip only
+                // dotfiles (.stfolder) and subdirectories.
+                if name.starts_with('.') {
+                    continue;
+                }
+                if f.file_type().map(|t| !t.is_file()).unwrap_or(true) {
                     continue;
                 }
                 let ts = f
@@ -57,15 +71,23 @@ pub fn pending() -> Vec<LogEntry> {
                             .map(|d| d.as_secs())
                             .unwrap_or(0)
                     });
-                let text = std::fs::read_to_string(&p).unwrap_or_default();
-                let text: String = text
+                let raw = std::fs::read_to_string(&p).unwrap_or_default();
+                // Sender: the trailing `-- <tag>` line the senders sign
+                // with. Unsigned (a phone relay drop) shows as "?".
+                let from = raw
+                    .lines()
+                    .rev()
+                    .find_map(|l| l.trim().strip_prefix("-- ").map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "?".into());
+                let text: String = raw
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ")
                     .chars()
                     .take(120)
                     .collect();
-                out.push(LogEntry { dest: dest.clone(), text, ts, path: Some(p) });
+                out.push(LogEntry { dest: dest.clone(), from, text, ts, path: Some(p) });
             }
         }
     }
@@ -89,7 +111,7 @@ pub fn log_tail(n: usize) -> Vec<LogEntry> {
             let ts: u64 = f.next()?.parse().ok()?;
             let dest = f.next()?.to_string();
             let text = f.next()?.to_string();
-            Some(LogEntry { dest, text, ts, path: None })
+            Some(LogEntry { dest, from: String::new(), text, ts, path: None })
         })
         .collect()
 }

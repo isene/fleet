@@ -149,7 +149,8 @@ fn main() {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         for l in inbox::pending() {
-            println!("msg   {:<8} {:>6} {}", l.dest,
+            let from = if l.from.is_empty() { "?" } else { &l.from };
+            println!("msg   {:<8} → {:<8} {:>6} {}", from, l.dest,
                      fmt_age(now.saturating_sub(l.ts)), l.text);
         }
         return;
@@ -744,12 +745,14 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         .unwrap_or(0);
     let room = (h as usize).saturating_sub(1 + take);
     for (n, e) in logs.iter().take(room).enumerate() {
+        // "<sender>  <age>  → <dest>: <text>" — the row reads from → to.
+        let from = if e.from.is_empty() { "?" } else { &e.from };
         let width = (cols as usize)
             .saturating_sub(26 + e.dest.chars().count())
             .max(10);
         let line = format!(
             " {:<8}  {:>6}  → {}: {}",
-            "msg",
+            clip(from, 8),
             fmt_age(now.saturating_sub(e.ts)),
             e.dest,
             clip_end(&e.text, width)
