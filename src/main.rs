@@ -207,7 +207,12 @@ fn main() {
             }
         }
         let logs = inbox::pending();
-        marked.retain(|p| items.iter().any(|i| &i.path == p));
+        // Keep a flag as long as its file is still an inbox item or a
+        // pending message; a delivered message drops its flag with it.
+        marked.retain(|p| {
+            items.iter().any(|i| &i.path == p)
+                || logs.iter().any(|e| e.path.as_deref() == Some(p.as_path()))
+        });
         // A flagged session that comes alive again is unflagged.
         marked_s.retain(|p| sess.iter().any(|s| {
             &s.path == p
@@ -379,29 +384,23 @@ fn main() {
                 }
             }
             Some("d") if focus == Focus::Inbox => {
-                if let Some(i) = items.get(sel_i) {
-                    if let Some(pos) = marked.iter().position(|p| p == &i.path) {
+                // Flag whichever row is under the cursor: an inbox file,
+                // or a pending message below them. `<` then deletes it.
+                let path = if sel_i < items.len() {
+                    items.get(sel_i).map(|i| i.path.clone())
+                } else {
+                    logs.get(sel_i - items.len())
+                        .and_then(|e| e.path.clone())
+                };
+                if let Some(p) = path {
+                    if let Some(pos) = marked.iter().position(|m| m == &p) {
                         marked.remove(pos);
                     } else {
-                        marked.push(i.path.clone());
+                        marked.push(p);
                     }
-                    if sel_i + 1 < items.len() {
+                    if sel_i + 1 < items.len() + logs.len() {
                         sel_i += 1; // flag-and-advance, pointer style
                     }
-                }
-            }
-            Some("<") if focus == Focus::Inbox && sel_i >= items.len() => {
-                // A message the receiving session will never take (wrong
-                // tag, session gone, or you dealt with it another way).
-                // Delivery clears the rest on its own.
-                match logs.get(sel_i - items.len()).and_then(|e| e.path.as_ref()) {
-                    Some(p) => {
-                        flash = match std::fs::remove_file(p) {
-                            Ok(()) => "message cleared".into(),
-                            Err(e) => format!("could not clear it: {}", e),
-                        };
-                    }
-                    None => flash = "that row has no message file".into(),
                 }
             }
             Some("<") => {
@@ -708,18 +707,43 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
               focused: bool, sel: usize, marked: &[std::path::PathBuf],
               logs: &[inbox::LogEntry]) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
-    let hdr = format!(" {:<8}  {:>6}  {}", "INBOX", "AGE", "FILE");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let take = (h as usize).saturating_sub(1).min(items.len());
+    let room = (h as usize).saturating_sub(1 + take);
+    // Message routes, precomputed so column 1 can size to the widest.
+    let routes: Vec<String> = logs
+        .iter()
+        .take(room)
+        .map(|e| {
+            let from = if e.from.is_empty() { "?" } else { &e.from };
+            format!("#{} → #{}", from, e.dest)
+        })
+        .collect();
+    // One column-1 width shared by header, files and messages, so every
+    // AGE and text column lines up. Clamped so a long route can't push
+    // the text off the pane.
+    let c1 = std::iter::once("INBOX".len())
+        .chain(items.iter().take(take).map(|i| i.label.chars().count().min(8)))
+        .chain(routes.iter().map(|r| r.chars().count()))
+        .max()
+        .unwrap_or(8)
+        .clamp(8, 30);
+    let txt_w = (cols as usize).saturating_sub(c1 + 11).max(10);
+    let hdr = format!(" {:<c1$}  {:>6}  {}", "INBOX", "AGE", "FILE", c1 = c1);
     let mut out = header_bar(&hdr, cols);
     if items.is_empty() && logs.is_empty() {
         out.push_str(&style::dim("  nothing waiting"));
     }
-    let take = (h as usize).saturating_sub(1).min(items.len());
     for (i, it) in items.iter().take(take).enumerate() {
+        let label = format!("{:<c1$}", clip(&it.label, c1), c1 = c1);
         let line = format!(
             " {}  {}  {}",
-            style::fg(&clip(&it.label, 8), 13),
+            style::fg(&label, 13),
             style::fg(&format!("{:>6}", fmt_age(it.age_secs)), 242),
-            clip_end(&it.name, (cols as usize).saturating_sub(22).max(10))
+            clip_end(&it.name, txt_w)
         );
         // Delete-flagged (pointer style): the whole row dark red;
         // selection still shows via the bar.
@@ -739,27 +763,25 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         out.push('\n');
     }
     // Pending bus messages (awaiting delivery), dim, below the items.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let room = (h as usize).saturating_sub(1 + take);
     for (n, e) in logs.iter().take(room).enumerate() {
         // "#<from> → #<dest>   <age>   <text>" — the row reads from → to.
-        let from = if e.from.is_empty() { "?" } else { &e.from };
-        let route = format!("#{} → #{}", from, e.dest);
-        let route_w = route.chars().count().max(16);
-        let width = (cols as usize)
-            .saturating_sub(route_w + 11)
-            .max(10);
+        let route = format!("{:<c1$}", clip(&routes[n], c1), c1 = c1);
         let line = format!(
-            " {:<rw$}  {:>6}  {}",
+            " {}  {:>6}  {}",
             route,
             fmt_age(now.saturating_sub(e.ts)),
-            clip_end(&e.text, width),
-            rw = route_w,
+            clip_end(&e.text, txt_w),
         );
-        let row = style::fg(&line, 245);
+        let flagged = e
+            .path
+            .as_deref()
+            .map(|p| marked.iter().any(|m| m.as_path() == p))
+            .unwrap_or(false);
+        let row = if flagged {
+            style::fg(crust::strip_ansi(&line).trim_end(), 88)
+        } else {
+            style::fg(&line, 245)
+        };
         if focused && sel == take + n {
             out.push_str(&bg_keep(row.trim_end(), 238));
         } else {
@@ -964,7 +986,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
     } else {
         match focus {
             Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · k stop · d flag · < purge · c today · ? help".to_string(),
-            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag · < purge/clear msg · M log · ? help".to_string(),
+            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag file/msg · < delete flagged · M log · ? help".to_string(),
         }
     };
     let right = format!("fleet v{} ", VERSION);
