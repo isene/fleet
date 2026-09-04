@@ -150,7 +150,7 @@ fn main() {
             .unwrap_or(0);
         for l in inbox::pending() {
             let from = if l.from.is_empty() { "?" } else { &l.from };
-            println!("msg   {:<8} → {:<8} {:>6} {}", from, l.dest,
+            println!("msg   #{} → #{}  {:>6}  {}", from, l.dest,
                      fmt_age(now.saturating_sub(l.ts)), l.text);
         }
         return;
@@ -745,17 +745,19 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         .unwrap_or(0);
     let room = (h as usize).saturating_sub(1 + take);
     for (n, e) in logs.iter().take(room).enumerate() {
-        // "<sender>  <age>  → <dest>: <text>" — the row reads from → to.
+        // "#<from> → #<dest>   <age>   <text>" — the row reads from → to.
         let from = if e.from.is_empty() { "?" } else { &e.from };
+        let route = format!("#{} → #{}", from, e.dest);
+        let route_w = route.chars().count().max(16);
         let width = (cols as usize)
-            .saturating_sub(26 + e.dest.chars().count())
+            .saturating_sub(route_w + 11)
             .max(10);
         let line = format!(
-            " {:<8}  {:>6}  → {}: {}",
-            clip(from, 8),
+            " {:<rw$}  {:>6}  {}",
+            route,
             fmt_age(now.saturating_sub(e.ts)),
-            e.dest,
-            clip_end(&e.text, width)
+            clip_end(&e.text, width),
+            rw = route_w,
         );
         let row = style::fg(&line, 245);
         if focused && sel == take + n {

@@ -26,6 +26,34 @@ pub struct LogEntry {
     pub path: Option<PathBuf>,
 }
 
+/// The sender tag a message signs off with. Two conventions in the
+/// wild: bus messages end `-- <tag>`, phone-relay ones `/<tag>` (often
+/// `/asm (chasm session)`). Returns the bare tag, no sigil. None when
+/// unsigned.
+fn parse_sender(raw: &str) -> Option<String> {
+    for line in raw.lines().rev() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("-- ") {
+            let tag = rest.split_whitespace().next().unwrap_or("");
+            if !tag.is_empty() {
+                return Some(tag.to_string());
+            }
+        }
+        if let Some(rest) = l.strip_prefix('/') {
+            // `/freewill` or `/asm (chasm session)` — the tag is the
+            // first word, letters/digits/-/_ only (skip real paths).
+            let tag: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if !tag.is_empty() && tag.len() == rest.split_whitespace().next().unwrap_or("").len() {
+                return Some(tag);
+            }
+        }
+    }
+    None
+}
+
 /// Messages sitting in the bus and relay mailboxes, not yet delivered.
 /// Newest first. These rows live in the INBOX pane; delivered traffic
 /// lives in the log popup.
@@ -72,14 +100,7 @@ pub fn pending() -> Vec<LogEntry> {
                             .unwrap_or(0)
                     });
                 let raw = std::fs::read_to_string(&p).unwrap_or_default();
-                // Sender: the trailing `-- <tag>` line the senders sign
-                // with. Unsigned (a phone relay drop) shows as "?".
-                let from = raw
-                    .lines()
-                    .rev()
-                    .find_map(|l| l.trim().strip_prefix("-- ").map(|s| s.trim().to_string()))
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "?".into());
+                let from = parse_sender(&raw).unwrap_or_else(|| "?".into());
                 let text: String = raw
                     .split_whitespace()
                     .collect::<Vec<_>>()
