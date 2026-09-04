@@ -234,6 +234,12 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
         lines.remove(0); // the first line is almost surely cut mid-record
     }
     let mut info = TailInfo::default();
+    // Headless (`claude -p`) vs interactive is per record, and an
+    // interactive session that spawns `claude -p` children logs a few
+    // sdk-cli lines of its own. So "headless" means every entrypoint
+    // seen is sdk-cli and not one is cli, decided after the whole tail.
+    let mut saw_sdk = false;
+    let mut saw_cli = false;
     for line in lines.iter().rev() {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -245,8 +251,10 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                 info.cwd = c.to_string();
             }
         }
-        if v["entrypoint"] == "sdk-cli" {
-            info.headless = true;
+        match v["entrypoint"].as_str() {
+            Some("sdk-cli") => saw_sdk = true,
+            Some("cli") => saw_cli = true,
+            _ => {}
         }
         if typ == "assistant" {
             let msg = &v["message"];
@@ -311,6 +319,7 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
             break;
         }
     }
+    info.headless = saw_sdk && !saw_cli;
     Some(info)
 }
 
