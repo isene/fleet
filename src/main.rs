@@ -125,7 +125,12 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "--list") {
         let wm = WinMap::connect();
         let map = wm.as_ref().map(|w| w.refresh()).unwrap_or_default();
-        for mut s in sessions::scan(&cfg, &mut cache) {
+        let scanned = sessions::scan(&cfg, &mut cache);
+        let addrs: Vec<String> = scanned.iter()
+            .filter(|s| s.tagged)
+            .map(|s| s.tag.clone())
+            .collect();
+        for mut s in scanned {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
             println!(
                 "{:<10} {:<8} {:>6} ws={} ctx={} {:<8} {}",
@@ -149,8 +154,9 @@ fn main() {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         for l in inbox::pending() {
-            let from = if l.from.is_empty() { "?" } else { &l.from };
-            println!("msg   #{} → #{}  {:>6}  {}", from, l.dest,
+            let from = if l.from.is_empty() { "?".to_string() } else { l.from.clone() };
+            let mark = if from == "?" || addrs.contains(&from) { "" } else { "?" };
+            println!("msg   #{}{} → #{}  {:>6}  {}", from, mark, l.dest,
                      fmt_age(now.saturating_sub(l.ts)), l.text);
         }
         return;
@@ -243,8 +249,15 @@ fn main() {
             draw_sessions(cols, 2, sess_h as u16, &sess,
                           focus == Focus::Sessions, sel_s, &marked_s,
                           cfg.ctx_window_k);
+            // The addresses the bus can actually deliver to: the tags of
+            // bookmarked sessions. A message signed with anything else
+            // carries a return address that leads nowhere.
+            let addrs: Vec<&str> = sess.iter()
+                .filter(|s| s.tagged)
+                .map(|s| s.tag.as_str())
+                .collect();
             draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
-                       focus == Focus::Inbox, sel_i, &marked, &logs);
+                       focus == Focus::Inbox, sel_i, &marked, &logs, &addrs);
         }
         draw_footer(cols, rows, focus, &flash,
                     rollup_rows.is_some(), &msg_to, &msg_buf);
@@ -705,7 +718,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
 
 fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
               focused: bool, sel: usize, marked: &[std::path::PathBuf],
-              logs: &[inbox::LogEntry]) {
+              logs: &[inbox::LogEntry], addrs: &[&str]) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -718,8 +731,14 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         .iter()
         .take(room)
         .map(|e| {
-            let from = if e.from.is_empty() { "?" } else { &e.from };
-            format!("#{} → #{}", from, e.dest)
+            // A sender that is not a deliverable address gets a "?", the
+            // same mark as an unsigned message: a reply to it goes into a
+            // directory the receiving hook never reads. #rust signing
+            // itself "fe2o3" is how this showed up.
+            let from = if e.from.is_empty() { "?".to_string() } else { e.from.clone() };
+            let known = addrs.iter().any(|a| *a == from);
+            let mark = if from == "?" || known { "" } else { "?" };
+            format!("#{}{} → #{}", from, mark, e.dest)
         })
         .collect();
     // One column-1 width shared by header, files and messages, so every
