@@ -66,6 +66,9 @@ pub struct Session {
 #[derive(Clone, Default)]
 struct TailInfo {
     last: char, // 'u' user, 'a' assistant text, 't' assistant tool_use
+    /// The newest assistant line stopped to call a tool, so the turn is
+    /// still Claude's however that line looked.
+    turn_open: bool,
     capped: bool, // newest line is a usage-limit refusal from the client
     headless: bool, // `claude -p`: entrypoint sdk-cli, no terminal, one prompt
     model: String,
@@ -168,7 +171,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 State::Capped
             } else if age > cfg.idle_mins * 60 {
                 State::Idle
-            } else if info.last == 'a' {
+            } else if info.last == 'a' && !info.turn_open {
                 State::Yours
             } else {
                 // A session that LOOKS working may in fact wait on the
@@ -264,6 +267,13 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                     .map(|a| a.iter().any(|b| b["type"] == "tool_use"))
                     .unwrap_or(false);
                 info.last = if tools { 't' } else { 'a' };
+                // Claude writes a text or thinking block of its own
+                // before the tool call it leads to, each as its own
+                // line. Both carry stop_reason "tool_use": the turn
+                // goes on. Reading only the content marked such a line
+                // 'a' and the row said YOURS while the model was still
+                // working, for as long as the next block took.
+                info.turn_open = msg["stop_reason"].as_str() == Some("tool_use");
                 // A client-written refusal ("<synthetic>") ends the
                 // transcript when a usage limit blocks the model. The
                 // session then waits for /model or for credits, which
