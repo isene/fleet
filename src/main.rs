@@ -912,7 +912,13 @@ fn resurrect(s: &Session, pref: Option<&config::SessionPref>) -> String {
     if let Some(bg) = pref.and_then(|p| p.bg.as_ref()) {
         c.env("GLASS_BG", bg);
     }
-    if s.tagged {
+    // Resume by name only while the name belongs to this session alone.
+    // `c <tag>` opens the first bookmark carrying the tag, so a name
+    // left on a second, usually long-dead session opens that one and it
+    // reads as fleet opening the session twice. The row's own id is the
+    // thing you pressed, so fall back to it.
+    let owns_tag = s.tagged && sessions::tag_owners(&s.tag) == [s.id.clone()];
+    if owns_tag {
         let Some(bin) = which("c") else {
             return "session resumer 'c' not in PATH".into();
         };

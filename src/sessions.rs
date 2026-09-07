@@ -476,6 +476,31 @@ fn ppid(pid: u32) -> Option<u32> {
     None
 }
 
+/// Every session id whose bookmark carries this tag, in any position.
+///
+/// `c <tag>` resumes the FIRST bookmark holding the tag, so a name that
+/// sits on two sessions opens whichever one the file lists first. That
+/// is not always the row you pressed, and the second window looks like
+/// fleet opening the same session twice. Fleet checks this before it
+/// resumes by name.
+pub fn tag_owners(tag: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let path = home().join(".cc-sessions/bookmarks.json");
+    let Ok(text) = std::fs::read_to_string(path) else { return out };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return out };
+    if let Some(map) = v["sessions"].as_object() {
+        for (id, entry) in map {
+            let hit = entry["tags"].as_array()
+                .map(|a| a.iter().any(|t| t.as_str() == Some(tag)))
+                .unwrap_or(false);
+            if hit {
+                out.push(id.clone());
+            }
+        }
+    }
+    out
+}
+
 pub fn load_tags() -> HashMap<String, String> {
     let mut out = HashMap::new();
     let path = home().join(".cc-sessions/bookmarks.json");
