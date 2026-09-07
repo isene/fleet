@@ -69,6 +69,9 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   and stays resumable with Enter
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
+- `o` / `Enter` on a `msg` row: hand the message to the session it is
+  for. A live session is told to read its mail right away; one that is
+  off or old is resumed in a fresh glass first, then told once it is up
 - `<` on a `msg` row: clear that message. Delivery clears the rest by
   itself, so this is for one nothing will collect: a wrong tag, a
   session that is gone, or something you handled another way

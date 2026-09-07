@@ -25,6 +25,10 @@ use std::process::{Command, Stdio};
 use winmap::WinMap;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// What a woken session is told to do. The bus hook hands a session its
+/// mail on the next user prompt, so a message only ever gets read when
+/// someone types into that session.
+const WAKE_PROMPT: &str = "Check fleet messages";
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -184,6 +188,10 @@ fn main() {
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
     let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
     let mut msg_buf = String::new();
+    // A session to prod, set by Enter on an inbox message:
+    // (tag, not before, give up). One that had to be resumed needs a few
+    // seconds of Claude Code start-up before it can take a prompt.
+    let mut wake: Option<(String, std::time::Instant, std::time::Instant)> = None;
 
     loop {
         let map = wm.as_ref().map(|w| w.refresh()).unwrap_or_default();
@@ -235,6 +243,27 @@ fn main() {
         sel_i = sel_i.min((items.len() + logs.len()).saturating_sub(1));
         if items.is_empty() && logs.is_empty() && focus == Focus::Inbox {
             focus = Focus::Sessions;   // the last item vanished under us
+        }
+
+        // Type the prompt into a woken session once it has a window and
+        // has had time to start. The X client list is only walked while a
+        // wake is pending, so an idle fleet keeps doing nothing.
+        if let Some((tag, not_before, give_up)) = wake.clone() {
+            let now_i = std::time::Instant::now();
+            if now_i >= not_before {
+                let xid = sess.iter().find(|s| s.tag == tag)
+                    .and_then(|s| s.pid)
+                    .and_then(|pid| wm.as_ref()
+                        .and_then(|c| sessions::window_ancestor(pid, &c.pid_windows())));
+                if let Some(x) = xid {
+                    type_prompt(x, WAKE_PROMPT);
+                    flash = format!("{} asked to check its messages", tag);
+                    wake = None;
+                } else if now_i >= give_up {
+                    flash = format!("{} never came up", tag);
+                    wake = None;
+                }
+            }
         }
 
         let body = rows.saturating_sub(2) as usize;
@@ -360,6 +389,24 @@ fn main() {
                             .stderr(Stdio::null())
                             .spawn();
                         flash = format!("opened {}", i.name);
+                    } else if let Some(e) = logs.get(sel_i - items.len()) {
+                        // A message row: hand it to the session it is for.
+                        // A live one is prodded now; one that is off or old
+                        // is resumed first, then prodded when its window is
+                        // up (the wake block at the top of the loop).
+                        let dest = e.dest.clone();
+                        let now_i = std::time::Instant::now();
+                        let secs = std::time::Duration::from_secs;
+                        match sess.iter().find(|s| s.tag == dest) {
+                            Some(s) if s.ws.is_some() => {
+                                wake = Some((dest, now_i, now_i + secs(30)));
+                            }
+                            Some(s) => {
+                                flash = resurrect(s, cfg.session_prefs.get(&s.tag));
+                                wake = Some((dest, now_i + secs(8), now_i + secs(90)));
+                            }
+                            None => flash = format!("no session tagged {}", dest),
+                        }
                     }
                 }
             },
@@ -932,6 +979,23 @@ fn log_append(dest: &str, text: &str) {
     }
 }
 
+/// Type a line into a session's terminal and press Enter, as the user
+/// would. Addressed at the window, so nothing has to be focused and the
+/// keys can never land in fleet itself. glass masks the synthetic bit off
+/// its event type (`and eax, 0x7F`), so it takes these as real presses.
+fn type_prompt(xid: u32, text: &str) {
+    let win = xid.to_string();
+    let run = |args: &[&str]| {
+        let _ = Command::new("xdotool")
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    };
+    run(&["type", "--window", &win, "--delay", "12", text]);
+    run(&["key", "--window", &win, "Return"]);
+}
+
 fn send_msg(addr: &str, text: &str) -> std::io::Result<()> {
     let dir = config::home().join(".fleet/bus").join(addr);
     std::fs::create_dir_all(&dir)?;
@@ -978,7 +1042,7 @@ fn help() {
     t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
     t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));
     t.push_str(&format!(" {}\n", hdr("INBOX")));
-    t.push_str(&format!("{}open the item\n", key("o / Enter")));
+    t.push_str(&format!("{}open a file; wake a msg's session\n", key("o / Enter")));
     t.push_str(&format!("{}flag the item for deletion\n", key("d")));
     t.push_str(&format!("{}on a msg row: clear that message\n", key("<")));
     t.push_str(&format!(" {}\n", hdr("GLOBAL")));
@@ -1005,7 +1069,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
     } else {
         match focus {
             Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · k stop · d flag · < purge · c today · ? help".to_string(),
-            Focus::Inbox => " q quit · TAB sessions · ↑↓ · o open · d flag file/msg · < delete flagged · M log · ? help".to_string(),
+            Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · ? help".to_string(),
         }
     };
     let right = format!("fleet v{} ", VERSION);
