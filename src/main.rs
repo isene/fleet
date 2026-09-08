@@ -29,6 +29,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// mail on the next user prompt, so a message only ever gets read when
 /// someone types into that session.
 const WAKE_PROMPT: &str = "Check fleet messages";
+/// Width of the SESSION column. Ten cut names like "corporate-int…"
+/// and left the tag unreadable, which is the one thing a row is for.
+const TAG_W: usize = 18;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -137,14 +140,15 @@ fn main() {
         for mut s in scanned {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
             println!(
-                "{:<10} {:<8} {:>6} ws={} ctx={} {:<8} {}",
+                "{:<w$} {:<8} {:>6} ws={} ctx={} {:<8} {}",
                 s.tag,
                 s.state.label(),
                 fmt_age(s.age_secs),
                 s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "-".into()),
                 s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "-".into()),
                 s.model,
-                s.prompt
+                s.prompt,
+                w = TAG_W
             );
         }
         for i in inbox::scan(&cfg) {
@@ -718,13 +722,13 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
                  sel: usize, marked: &[std::path::PathBuf], window_k: u64) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
-        " {:<10}  {:<7}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
-        "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT"
+        " {:<w$}  {:<7}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
+        "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT", w = TAG_W
     );
     let mut out = header_bar(&hdr, cols);
     let take = (h as usize).saturating_sub(1).min(sess.len());
     for (i, s) in sess.iter().take(take).enumerate() {
-        let width = (cols as usize).saturating_sub(53);
+        let width = (cols as usize).saturating_sub(43 + TAG_W);
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
@@ -732,7 +736,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
             " {}  {}  {}  {:>2}  {}  {}  {}",
             // Bookmarked tags magenta like the statusline; unbookmarked
             // sessions show their directory name in light gray.
-            style::fg(&clip(&s.tag, 10), if s.tagged { 13 } else { 250 }),
+            style::fg(&clip(&s.tag, TAG_W), if s.tagged { 13 } else { 250 }),
             style::styled(&format!("{:<7}", s.state.label()),
                           Some(state_color(s.state)), None,
                           if s.state == State::Yours { "b" } else { "" }),
