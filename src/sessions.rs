@@ -384,7 +384,10 @@ fn short_model(m: &str) -> String {
     name
 }
 
-/// {session-uuid → pid} for every running `claude --resume <uuid>`.
+/// {session-uuid → pid} for every running claude. `--resume <uuid>` names
+/// its session. A plain `claude` or `claude -c` (cck in a directory) does
+/// not, so it is matched to the newest transcript of the project it runs
+/// in, which is the one `-c` continues or a new session just wrote.
 fn claude_procs() -> HashMap<String, u32> {
     let mut out = HashMap::new();
     let proc_dir = match std::fs::read_dir("/proc") {
@@ -406,13 +409,46 @@ fn claude_procs() -> HashMap<String, u32> {
             .split(|b| *b == 0)
             .map(|s| String::from_utf8_lossy(s).to_string())
             .collect();
+        let mut resumed = false;
         for w in args.windows(2) {
             if w[0] == "--resume" {
                 out.insert(w[1].clone(), pid);
+                resumed = true;
+            }
+        }
+        if !resumed {
+            if let Some(id) = newest_transcript_for(pid) {
+                out.entry(id).or_insert(pid);
             }
         }
     }
     out
+}
+
+/// The newest transcript in the project directory of a claude process.
+/// Claude Code names the project dir after the cwd with every
+/// non-alphanumeric character turned into '-'.
+fn newest_transcript_for(pid: u32) -> Option<String> {
+    let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid)).ok()?;
+    let name: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let dir = home().join(".claude/projects").join(name);
+    let mut best: Option<(SystemTime, String)> = None;
+    for f in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = f.path();
+        if p.extension().map(|e| e != "jsonl").unwrap_or(true) {
+            continue;
+        }
+        let Ok(m) = f.metadata().and_then(|m| m.modified()) else { continue };
+        let Some(id) = p.file_stem().map(|s| s.to_string_lossy().to_string()) else { continue };
+        if best.as_ref().map(|(t, _)| m > *t).unwrap_or(true) {
+            best = Some((m, id));
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// pid → nearest ancestor (self included) present in the window map.
