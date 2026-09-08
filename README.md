@@ -55,7 +55,9 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `Enter` on a session: raise its own glass (one of several stacked on
   a workspace) and jump to that workspace (xdotool key injection),
   or, when it has no window, resume it in a new glass terminal (detached
-  through `setsid`, so it outlives fleet)
+  through `setsid`, so it outlives fleet). A session on a gateway model
+  (`cck`: Kimi through OpenRouter) is resumed through `cck`, so it stays
+  on that model
 - `m` on a session: type a message, Enter drops it on the bus
 - `y` on a session: copy its session id to the clipboard, to hand another
   Claude session so it can read what happened there

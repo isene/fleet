@@ -918,14 +918,21 @@ fn resurrect(s: &Session, pref: Option<&config::SessionPref>) -> String {
     // reads as fleet opening the session twice. The row's own id is the
     // thing you pressed, so fall back to it.
     let owns_tag = s.tagged && sessions::tag_owners(&s.tag) == [s.id.clone()];
+    // A session on a gateway model (cck: Kimi through OpenRouter) carries
+    // a provider/model name. Resume it through cck, which sets the same
+    // endpoint and model again; c or claude would bring it back on the
+    // default Claude model.
+    let gateway = s.model.contains('/');
     if owns_tag {
-        let Some(bin) = which("c") else {
-            return "session resumer 'c' not in PATH".into();
+        let resumer = if gateway { "cck" } else { "c" };
+        let Some(bin) = which(resumer) else {
+            return format!("session resumer '{}' not in PATH", resumer);
         };
         c.args(["-e", &bin, &s.tag]);
     } else {
-        let Some(bin) = which("claude") else {
-            return "'claude' not in PATH".into();
+        let resumer = if gateway { "cck" } else { "claude" };
+        let Some(bin) = which(resumer) else {
+            return format!("'{}' not in PATH", resumer);
         };
         c.args(["-e", &bin, "--resume", &s.id]);
         if !s.cwd.is_empty() {
