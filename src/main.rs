@@ -518,7 +518,7 @@ fn main() {
             }
             Some("p") if focus == Focus::Sessions => {
                 // Park a session, or wake it from parking. A parked one
-                // stays in the list, out of the counts and at the bottom,
+                // stays in the list, out of the counts and up at the top,
                 // until it works again.
                 if let Some(s) = sess.get(sel_s) {
                     let tag = s.tag.clone();
@@ -1083,7 +1083,7 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
-    t.push_str(&format!("{}park it: listed, uncounted, at the bottom\n", key("p")));
+    t.push_str(&format!("{}park it: listed, uncounted, up top\n", key("p")));
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));
