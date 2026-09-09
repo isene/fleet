@@ -68,7 +68,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   with the current colour. Saved to `~/.fleetrc`, applied next resume
   via the `GLASS_BG` env
 - `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
-  and stays resumable with Enter
+  and stays resumable with Enter. A parked session loses its parking
+  here, since "off" is what the row should say
 - `p` park the selected session, or bring it back. A parked session
   stays listed, drops out of the YOURS and working counts, and sorts to
   the top as a block that does not move. Work clears it: the moment that

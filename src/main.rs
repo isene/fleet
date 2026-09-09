@@ -436,6 +436,12 @@ fn main() {
                             let hard = k == Some("K");
                             let sig = if hard { libc::SIGKILL } else { libc::SIGTERM };
                             if unsafe { libc::kill(pid as i32, sig) } == 0 {
+                                // A stopped session is off, and off is what
+                                // the row should say. Parking is for a live
+                                // one you are choosing to ignore.
+                                if cfg.parked.remove(&s.tag) {
+                                    config::write_parked(&cfg.parked);
+                                }
                                 format!("stopped {} (SIG{})", s.tag,
                                         if hard { "KILL" } else { "TERM" })
                             } else {
