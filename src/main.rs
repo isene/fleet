@@ -59,6 +59,7 @@ fn state_color(s: State) -> u8 {
         State::Idle => 69,    // alive but quiet: blue, never one of the greys
         State::Off => 60,
         State::Older => 240, // darker than off, but never the bar's 238
+        State::Parked => 245, // grey, and lighter than older: set aside, not gone
     }
 }
 
@@ -202,6 +203,20 @@ fn main() {
         let mut sess = sessions::scan(&cfg, &mut cache);
         for s in &mut sess {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
+        }
+        // Parking is for quiet sessions. One that has started working
+        // again says so, and the flag goes with it.
+        if !cfg.parked.is_empty() {
+            let busy: Vec<String> = sess.iter()
+                .filter(|s| s.state == State::Working && cfg.parked.contains(&s.tag))
+                .map(|s| s.tag.clone())
+                .collect();
+            if !busy.is_empty() {
+                for t in busy {
+                    cfg.parked.remove(&t);
+                }
+                config::write_parked(&cfg.parked);
+            }
         }
         let items = inbox::scan(&cfg);
         let pdir = config::home().join(".fleet/relay/phone");
@@ -499,6 +514,21 @@ fn main() {
                     let addr = if s.tagged { s.tag.clone() } else { s.id.clone() };
                     msg_to = Some((addr, s.tag.clone()));
                     msg_buf.clear();
+                }
+            }
+            Some("p") if focus == Focus::Sessions => {
+                // Park a session, or wake it from parking. A parked one
+                // stays in the list, out of the counts and at the bottom,
+                // until it works again.
+                if let Some(s) = sess.get(sel_s) {
+                    let tag = s.tag.clone();
+                    flash = if cfg.parked.remove(&tag) {
+                        format!("{} is back in the list", tag)
+                    } else {
+                        cfg.parked.insert(tag.clone());
+                        format!("{} parked", tag)
+                    };
+                    config::write_parked(&cfg.parked);
                 }
             }
             Some("y") if focus == Focus::Sessions => {
@@ -1053,6 +1083,7 @@ fn help() {
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
+    t.push_str(&format!("{}park it: listed, uncounted, at the bottom\n", key("p")));
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));
@@ -1085,7 +1116,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · k stop · d flag · < purge · c today · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · ? help".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · ? help".to_string(),
         }
     };

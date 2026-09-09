@@ -21,6 +21,7 @@ pub enum State {
     Idle,    // alive but nothing has happened for idle_mins
     Off,     // no claude process runs this session
     Older,   // bookmarked but beyond the recent window: curated history
+    Parked,  // set aside by the user; it drops the moment work starts
 }
 
 impl State {
@@ -32,6 +33,7 @@ impl State {
             State::Idle => "idle",
             State::Off => "off",
             State::Older => "older",
+            State::Parked => "parked",
         }
     }
     fn rank(self) -> u8 {
@@ -42,6 +44,7 @@ impl State {
             State::Idle => 3,
             State::Off => 4,
             State::Older => 5,
+            State::Parked => 6,
         }
     }
 }
@@ -194,6 +197,15 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| "?".into())
             });
+            // Set aside by the user, so it neither counts nor sits near
+            // the top. Work beats parking: a session that starts again
+            // shows what it is doing, and fleet drops the flag.
+            let state = if cfg.parked.contains(&tag)
+                && !matches!(state, State::Working | State::Capped) {
+                State::Parked
+            } else {
+                state
+            };
             out.push(Session {
                 id,
                 tag,

@@ -7,6 +7,8 @@
 //!   ctx_window_k N                 context window in k tokens (default 1000);
 //!                                  CTX turns yellow at 50 % and red at 75 %
 //!                                  of it, like the CC statusline
+//!   parked <tag>                   a session to leave alone: listed, but
+//!                                  not counted and sorted to the bottom
 //!   session <tag> <ws> [bg]        where a resumed session's glass opens
 //!                                  (ws is 1-based, or '-' for none; bg is
 //!                                  the glass background as BARE hex, e.g.
@@ -18,7 +20,7 @@
 //! machine's conventions: laptop screenshots land in ~ as *_scrot.png,
 //! phone items (screenshots, files) land in ~/.transfer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub struct Watch {
@@ -42,6 +44,9 @@ pub struct Config {
     pub inbox_days: u64,
     pub ctx_window_k: u64,
     pub session_prefs: HashMap<String, SessionPref>,
+    /// Tags the user has told fleet to stop nagging about. Cleared the
+    /// moment such a session starts working again.
+    pub parked: HashSet<String>,
 }
 
 /// A 1-based workspace field from the config ('-' = none) to 0-based.
@@ -76,6 +81,7 @@ impl Config {
             inbox_days: 3,
             ctx_window_k: 1000,
             session_prefs: HashMap::new(),
+            parked: HashSet::new(),
         };
         let mut have_inbox = false;
         if let Ok(text) = std::fs::read_to_string(home().join(".fleetrc")) {
@@ -95,6 +101,9 @@ impl Config {
                     ["idle_mins", n] => cfg.idle_mins = n.parse().unwrap_or(cfg.idle_mins),
                     ["ctx_window_k", n] => cfg.ctx_window_k = n.parse().unwrap_or(cfg.ctx_window_k),
                     ["inbox_days", n] => cfg.inbox_days = n.parse().unwrap_or(cfg.inbox_days),
+                    ["parked", tag] => {
+                        cfg.parked.insert(tag.to_string());
+                    }
                     ["session", tag, ws] => {
                         cfg.session_prefs.insert(tag.to_string(),
                             SessionPref { ws: parse_ws(ws), bg: None });
@@ -145,6 +154,30 @@ pub fn write_session_pref(tag: &str, pref: &SessionPref) {
             line.push_str(bg.trim_start_matches('#'));
         }
         lines.push(line);
+    }
+    let tmp = path.with_extension("fleetrc.tmp");
+    let body = lines.join("\n") + "\n";
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// Rewrite every `parked` line in ~/.fleetrc, keeping the rest. Called
+/// when the user parks a session and when a parked one starts working,
+/// so it is a handful of writes a day rather than one per tick.
+pub fn write_parked(parked: &HashSet<String>) {
+    let path = home().join(".fleetrc");
+    let mut lines: Vec<String> = std::fs::read_to_string(&path)
+        .map(|t| t.lines().map(String::from).collect())
+        .unwrap_or_default();
+    lines.retain(|l| {
+        let f: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
+        !(f.len() >= 2 && f[0] == "parked")
+    });
+    let mut tags: Vec<&String> = parked.iter().collect();
+    tags.sort();
+    for t in tags {
+        lines.push(format!("parked {}", t));
     }
     let tmp = path.with_extension("fleetrc.tmp");
     let body = lines.join("\n") + "\n";

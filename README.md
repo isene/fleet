@@ -69,6 +69,10 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   via the `GLASS_BG` env
 - `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
   and stays resumable with Enter
+- `p` park the selected session, or bring it back. A parked session
+  stays listed, drops out of the YOURS and working counts, and sorts to
+  the bottom. Work clears it: the moment that session is busy again it
+  shows as working, and the parking is gone
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
 - `o` / `Enter` on a `msg` row: hand the message to the session it is
