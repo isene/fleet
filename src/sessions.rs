@@ -202,8 +202,10 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             // Set aside by the user: out of both counts, and gathered at
             // the top where it stays put. Work beats parking, so a session
             // that starts again shows what it is doing and loses the flag.
+            // A session that has ended is off, parked or not.
             let state = if cfg.parked.contains(&tag)
-                && !matches!(state, State::Working | State::Capped) {
+                && !matches!(state, State::Working | State::Capped
+                                  | State::Off | State::Older) {
                 State::Parked
             } else {
                 state

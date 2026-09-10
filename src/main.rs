@@ -205,14 +205,20 @@ fn main() {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
         }
         // Parking is for quiet sessions. One that has started working
-        // again says so, and the flag goes with it.
+        // again says so, and the flag goes with it. One the user has ended
+        // drops it too, the same as a session stopped with `k`.
         if !cfg.parked.is_empty() {
-            let busy: Vec<String> = sess.iter()
-                .filter(|s| s.state == State::Working && cfg.parked.contains(&s.tag))
-                .map(|s| s.tag.clone())
+            let drop: Vec<String> = cfg.parked.iter()
+                .filter(|t| {
+                    let mine = || sess.iter().filter(|s| &s.tag == *t);
+                    mine().any(|s| s.state == State::Working)
+                        || (mine().next().is_some()
+                            && mine().all(|s| matches!(s.state, State::Off | State::Older)))
+                })
+                .cloned()
                 .collect();
-            if !busy.is_empty() {
-                for t in busy {
+            if !drop.is_empty() {
+                for t in drop {
                     cfg.parked.remove(&t);
                 }
                 config::write_parked(&cfg.parked);
