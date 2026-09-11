@@ -36,7 +36,7 @@ const TAG_W: usize = 18;
 /// light with black text the way pointer's top row reads.
 const BAR_BG: u8 = 235;
 const TOP_FG: u8 = 0;
-const TOP_BG: u8 = 246;
+const TOP_BG: u8 = 244;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -63,7 +63,7 @@ fn state_color(s: State) -> u8 {
         State::Yours => 208,
         State::Idle => 69,    // alive but quiet: blue, never one of the greys
         State::Off => 60,
-        State::Older => 240, // darker than off, but never the bar's 238
+        State::Older => 240, // darker than off, but never the bar's 235
         State::Parked => 245, // grey, and lighter than older: set aside, not gone
     }
 }
