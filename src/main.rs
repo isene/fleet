@@ -34,7 +34,7 @@ const WAKE_PROMPT: &str = "Check fleet messages";
 const TAG_W: usize = 18;
 /// Selection bar, darker than the rows it sits under, and the header bar,
 /// light with black text the way pointer's top row reads.
-const BAR_BG: u8 = 235;
+const BAR_BG: u8 = 236;
 const TOP_FG: u8 = 0;
 const TOP_BG: u8 = 243;
 
