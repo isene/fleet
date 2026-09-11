@@ -36,7 +36,7 @@ const TAG_W: usize = 18;
 /// light with black text the way pointer's top row reads.
 const BAR_BG: u8 = 235;
 const TOP_FG: u8 = 0;
-const TOP_BG: u8 = 244;
+const TOP_BG: u8 = 243;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -762,7 +762,7 @@ fn build_rates(path: &str) -> Option<String> {
 fn header_bar(text: &str, cols: u16) -> String {
     let mut s = text.to_string();
     pad(&mut s, cols as usize);
-    format!("{}\n", style::styled(&s, Some(TOP_FG), Some(TOP_BG), "b"))
+    format!("{}\n", style::styled(&s, Some(TOP_FG), Some(TOP_BG), ""))
 }
 
 /// Context size coloring, identical to the CC statusline's [NN%]: green
