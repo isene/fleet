@@ -32,6 +32,11 @@ const WAKE_PROMPT: &str = "Check fleet messages";
 /// Width of the SESSION column. Ten cut names like "corporate-int…"
 /// and left the tag unreadable, which is the one thing a row is for.
 const TAG_W: usize = 18;
+/// Selection bar, darker than the rows it sits under, and the header bar,
+/// light with black text the way pointer's top row reads.
+const BAR_BG: u8 = 235;
+const TOP_FG: u8 = 0;
+const TOP_BG: u8 = 246;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -757,7 +762,7 @@ fn build_rates(path: &str) -> Option<String> {
 fn header_bar(text: &str, cols: u16) -> String {
     let mut s = text.to_string();
     pad(&mut s, cols as usize);
-    format!("{}\n", style::styled(&s, Some(250), Some(236), "b"))
+    format!("{}\n", style::styled(&s, Some(TOP_FG), Some(TOP_BG), "b"))
 }
 
 /// Context size coloring, identical to the CC statusline's [NN%]: green
@@ -801,12 +806,12 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
         let line = if marked.contains(&s.path) {
             let body = style::fg(crust::strip_ansi(&line).trim_end(), 88);
             if focused && i == sel {
-                bg_row(&body, cols, 238)
+                bg_row(&body, cols, BAR_BG)
             } else {
                 body
             }
         } else if focused && i == sel {
-            bg_row(&line, cols, 238)
+            bg_row(&line, cols, BAR_BG)
         } else {
             line
         };
@@ -870,12 +875,12 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         let line = if marked.contains(&it.path) {
             let body = style::fg(crust::strip_ansi(&line).trim_end(), 88);
             if focused && i == sel {
-                bg_row(&body, cols, 238)
+                bg_row(&body, cols, BAR_BG)
             } else {
                 body
             }
         } else if focused && i == sel {
-            bg_row(&line, cols, 238)
+            bg_row(&line, cols, BAR_BG)
         } else {
             line
         };
@@ -903,7 +908,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             style::fg(&line, 245)
         };
         if focused && sel == take + n {
-            out.push_str(&bg_row(&row, cols, 238));
+            out.push_str(&bg_row(&row, cols, BAR_BG));
         } else {
             out.push_str(&row);
         }
