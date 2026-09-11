@@ -84,6 +84,14 @@ fn bg_keep(s: &str, bg: u8) -> String {
             arm, s.replace("\x1b[0m", &format!("\x1b[0m{}", arm)))
 }
 
+/// The selection bar run out to the right edge, so the whole row reads
+/// as one block instead of stopping at the last letter.
+fn bg_row(line: &str, cols: u16, bg: u8) -> String {
+    let mut s = line.trim_end().to_string();
+    pad(&mut s, cols as usize);
+    bg_keep(&s, bg)
+}
+
 fn clip(s: &str, max: usize) -> String {
     let n = s.chars().count();
     if n <= max {
@@ -793,12 +801,12 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
         let line = if marked.contains(&s.path) {
             let body = style::fg(crust::strip_ansi(&line).trim_end(), 88);
             if focused && i == sel {
-                bg_keep(&body, 238)
+                bg_row(&body, cols, 238)
             } else {
                 body
             }
         } else if focused && i == sel {
-            bg_keep(line.trim_end(), 238)
+            bg_row(&line, cols, 238)
         } else {
             line
         };
@@ -862,12 +870,12 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         let line = if marked.contains(&it.path) {
             let body = style::fg(crust::strip_ansi(&line).trim_end(), 88);
             if focused && i == sel {
-                bg_keep(&body, 238)
+                bg_row(&body, cols, 238)
             } else {
                 body
             }
         } else if focused && i == sel {
-            bg_keep(line.trim_end(), 238)
+            bg_row(&line, cols, 238)
         } else {
             line
         };
@@ -895,7 +903,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
             style::fg(&line, 245)
         };
         if focused && sel == take + n {
-            out.push_str(&bg_keep(row.trim_end(), 238));
+            out.push_str(&bg_row(&row, cols, 238));
         } else {
             out.push_str(&row);
         }
