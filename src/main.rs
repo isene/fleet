@@ -438,8 +438,8 @@ fn main() {
                             Some(w) if Some(w) == cur => {
                                 format!("→ {} raised", s.tag)
                             }
-                            Some(w) => jump(&s.tag, w),
-                            None => resurrect(s, cfg.session_prefs.get(&s.tag)),
+                            Some(w) => jump(wm.as_ref(), &s.tag, w),
+                            None => resurrect(wm.as_ref(), s, cfg.session_prefs.get(&s.tag)),
                         };
                     }
                 }
@@ -465,7 +465,7 @@ fn main() {
                                 wake = Some((dest, now_i, now_i + secs(30)));
                             }
                             Some(s) => {
-                                flash = resurrect(s, cfg.session_prefs.get(&s.tag));
+                                flash = resurrect(wm.as_ref(), s, cfg.session_prefs.get(&s.tag));
                                 wake = Some((dest, now_i + secs(8), now_i + secs(90)));
                             }
                             None => flash = format!("no session tagged {}", dest),
@@ -943,19 +943,15 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
     pane.refresh();
 }
 
-/// Switch to the session's workspace by injecting tile's own hotkey
-/// (frame supports XTEST). Falls back to naming the workspace.
-fn jump(tag: &str, ws: u32) -> String {
-    // tile binds Mod4+0 to workspace 10, Mod4+1..9 to the rest.
-    let key = if ws == 9 { "super+0".to_string() } else { format!("super+{}", ws + 1) };
-    match Command::new("xdotool")
-        .args(["key", &key])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(st) if st.success() => format!("→ {} on ws {}", tag, ws + 1),
-        _ => format!("{} is on workspace {} (Mod4+{})", tag, ws + 1, ws + 1),
+/// Switch to the session's workspace. Without an X connection, name the
+/// workspace instead.
+fn jump(wm: Option<&WinMap>, tag: &str, ws: u32) -> String {
+    match wm {
+        Some(c) => {
+            c.switch_desktop(ws);
+            format!("→ {} on ws {}", tag, ws + 1)
+        }
+        None => format!("{} is on workspace {} (Mod4+{})", tag, ws + 1, (ws + 1) % 10),
     }
 }
 
@@ -974,18 +970,12 @@ fn which(cmd: &str) -> Option<String> {
 /// A session with no window on this display: resume it in a fresh glass.
 /// Tagged sessions go through `c <tag>` (CC-sessions: path + auto-follow);
 /// untagged ones get a plain resume in their own working directory.
-fn resurrect(s: &Session, pref: Option<&config::SessionPref>) -> String {
+fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref>) -> String {
     // Open on the tag's configured workspace: switch there first so tile
     // maps the new glass on it (tile places new windows on the current
     // workspace). No-op when the tag has no workspace set.
-    if let Some(ws) = pref.and_then(|p| p.ws) {
-        // tile binds Mod4+0 to workspace 10, Mod4+1..9 to the rest.
-        let key = if ws == 9 { "super+0".to_string() } else { format!("super+{}", ws + 1) };
-        let _ = Command::new("xdotool")
-            .args(["key", &key])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    if let (Some(ws), Some(c)) = (pref.and_then(|p| p.ws), wm) {
+        c.switch_desktop(ws);
     }
     // Through setsid: the new glass gets its own session and process
     // group, so quitting fleet (or closing the terminal fleet runs in)

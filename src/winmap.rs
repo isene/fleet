@@ -137,6 +137,21 @@ impl WinMap {
         let _ = self.conn.flush();
     }
 
+    /// Switch tile to workspace `index` (0-based, so 9 is workspace 10)
+    /// with the EWMH _NET_CURRENT_DESKTOP request on the root. It replaces
+    /// faking tile's Mod4+N, which a held Shift turned into Mod4+Shift+N,
+    /// move-to N. Needs tile v0.1.59 or later.
+    pub fn switch_desktop(&self, index: u32) {
+        let ev = ClientMessageEvent::new(
+            32, self.root, self.atom_current_desktop, [index, 0, 0, 0, 0]);
+        let _ = self.conn.send_event(
+            false, self.root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            ev,
+        );
+        let _ = self.conn.flush();
+    }
+
     /// Type `text` into one window, then Enter, with synthetic key events.
     ///
     /// xdotool fakes real key presses (XTEST) whenever its target has the
