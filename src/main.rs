@@ -112,10 +112,11 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("fleet — Claude Code mission control (Fe2O3 suite)");
         println!();
-        println!("Usage: fleet [--list | --today]");
+        println!("Usage: fleet [--list | --today | --wake TAG]");
         println!();
         println!("  --list     print sessions and inbox as text and exit");
         println!("  --today    print today's token rollup per session and exit");
+        println!("  --wake TAG type the check-messages prompt into that open session and exit");
         println!();
         println!("Sessions with state (working / YOURS / CAPPED / idle / off), workspace and");
         println!("context size, plus the inbox folders where handoffs land.");
@@ -182,6 +183,30 @@ fn main() {
                      fmt_age(now.saturating_sub(l.ts)), l.text);
         }
         return;
+    }
+
+    // Wake one open session from a script: type the check-messages
+    // prompt into its window, the same as Enter on an inbox row.
+    if let Some(i) = std::env::args().position(|a| a == "--wake") {
+        let tag = std::env::args().nth(i + 1).unwrap_or_default();
+        let Some(wm) = WinMap::connect() else {
+            eprintln!("fleet: no X display");
+            std::process::exit(1);
+        };
+        let windows = wm.pid_windows();
+        let xid = sessions::scan(&cfg, &mut cache).into_iter()
+            .find(|s| s.tag == tag)
+            .and_then(|s| s.pid)
+            .and_then(|pid| sessions::window_ancestor(pid, &windows));
+        match xid {
+            Some(x) if wm.type_line(x, WAKE_PROMPT) => {
+                println!("{} asked to check its messages", tag);
+                return;
+            }
+            Some(_) => eprintln!("fleet: could not type into {}", tag),
+            None => eprintln!("fleet: {} has no open window", tag),
+        }
+        std::process::exit(1);
     }
 
     Crust::init();
@@ -294,7 +319,7 @@ fn main() {
                     .and_then(|pid| wm.as_ref()
                         .and_then(|c| sessions::window_ancestor(pid, &c.pid_windows())));
                 if let Some(x) = xid {
-                    type_prompt(x, WAKE_PROMPT);
+                    wm.as_ref().map(|c| c.type_line(x, WAKE_PROMPT));
                     flash = format!("{} asked to check its messages", tag);
                     wake = None;
                 } else if now_i >= give_up {
@@ -1055,18 +1080,6 @@ fn log_append(dest: &str, text: &str) {
 /// would. Addressed at the window, so nothing has to be focused and the
 /// keys can never land in fleet itself. glass masks the synthetic bit off
 /// its event type (`and eax, 0x7F`), so it takes these as real presses.
-fn type_prompt(xid: u32, text: &str) {
-    let win = xid.to_string();
-    let run = |args: &[&str]| {
-        let _ = Command::new("xdotool")
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    };
-    run(&["type", "--window", &win, "--delay", "12", text]);
-    run(&["key", "--window", &win, "Return"]);
-}
 
 fn send_msg(addr: &str, text: &str) -> std::io::Result<()> {
     let dir = config::home().join(".fleet/bus").join(addr);

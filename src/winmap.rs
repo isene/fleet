@@ -9,7 +9,8 @@
 use std::collections::HashMap;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask,
+    Atom, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, KeyButMask,
+    KeyPressEvent, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
 };
 use x11rb::rust_connection::RustConnection;
 
@@ -134,6 +135,71 @@ impl WinMap {
             ev,
         );
         let _ = self.conn.flush();
+    }
+
+    /// Type `text` into one window, then Enter, with synthetic key events.
+    ///
+    /// xdotool fakes real key presses (XTEST) whenever its target has the
+    /// focus, and a real press merges with any key the user holds down:
+    /// Mod4 plus the "h" of "Check" ran tile's Mod4+h and ate the letter.
+    /// SendEvent goes to this window alone and never meets a key binding,
+    /// focused or not. frame hands it to the window's owner, and glass
+    /// accepts it. Printable ASCII only; false if a character had no key.
+    pub fn type_line(&self, xid: u32, text: &str) -> bool {
+        let setup = self.conn.setup();
+        let (min, max) = (setup.min_keycode, setup.max_keycode);
+        let map = match self.conn.get_keyboard_mapping(min, max - min + 1)
+            .ok().and_then(|c| c.reply().ok())
+        {
+            Some(m) => m,
+            None => return false,
+        };
+        let per = (map.keysyms_per_keycode as usize).max(1);
+        // Latin-1 keysyms equal their character code; Return is 0xff0d.
+        // Column 0 of a key is its plain symbol, column 1 its shifted one.
+        let key_for = |sym: u32| {
+            map.keysyms.chunks(per).enumerate().find_map(|(i, syms)| {
+                let code = min + i as u8;
+                if syms.first() == Some(&sym) {
+                    Some((code, false))
+                } else if syms.get(1) == Some(&sym) {
+                    Some((code, true))
+                } else {
+                    None
+                }
+            })
+        };
+        let press = |code: u8, shift: bool| {
+            let state = if shift { KeyButMask::SHIFT } else { KeyButMask::from(0u16) };
+            for (kind, mask) in [(KEY_PRESS_EVENT, EventMask::KEY_PRESS),
+                                 (KEY_RELEASE_EVENT, EventMask::KEY_RELEASE)] {
+                let ev = KeyPressEvent {
+                    response_type: kind, detail: code, sequence: 0, time: 0,
+                    root: self.root, event: xid, child: 0,
+                    root_x: 1, root_y: 1, event_x: 1, event_y: 1,
+                    state, same_screen: true,
+                };
+                let _ = self.conn.send_event(false, xid, mask, ev);
+            }
+            let _ = self.conn.flush();
+            // xdotool's pace. A burst can read as a paste to a TUI.
+            std::thread::sleep(std::time::Duration::from_millis(12));
+        };
+        let mut all = true;
+        for ch in text.chars() {
+            let key = if (' '..='~').contains(&ch) { key_for(ch as u32) } else { None };
+            match key {
+                Some((code, shift)) => press(code, shift),
+                None => all = false,
+            }
+        }
+        // Enter as its own key after a beat, as the two xdotool runs did.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        match key_for(0xff0d) {
+            Some((code, _)) => press(code, false),
+            None => all = false,
+        }
+        all
     }
 
     fn query_tree_root(&self) -> Vec<u32> {

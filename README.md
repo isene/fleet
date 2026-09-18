@@ -95,7 +95,9 @@ bold blue, ages gray, and context size on the statusline's own scale:
 green under 50 % of the window, yellow under 75 %, red above.
 
 `fleet --list` prints sessions and inbox as plain text; `fleet --today`
-prints the rollup. Both exit immediately.
+prints the rollup. `fleet --wake <tag>` types the check-messages prompt
+into that open session, the same as Enter on an inbox row. All three
+exit immediately.
 
 ## Message bus
 
