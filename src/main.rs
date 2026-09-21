@@ -971,6 +971,14 @@ fn which(cmd: &str) -> Option<String> {
 /// Tagged sessions go through `c <tag>` (CC-sessions: path + auto-follow);
 /// untagged ones get a plain resume in their own working directory.
 fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref>) -> String {
+    // A running claude means the session is already open, even when no
+    // window carries its pid: a window whose _NET_WM_PID reads 0 leaves
+    // the row with no workspace, and Enter then looked like "resume it".
+    // Resuming puts a SECOND claude on the same transcript, which is the
+    // duplicate session seen on 2026-09-21. Say where it is instead.
+    if let Some(pid) = s.pid {
+        return format!("{} already runs (pid {}) with no window fleet can see", s.tag, pid);
+    }
     // Open on the tag's configured workspace: switch there first so tile
     // maps the new glass on it (tile places new windows on the current
     // workspace). No-op when the tag has no workspace set.
