@@ -71,13 +71,32 @@ fn state_color(s: State) -> u8 {
 /// Truncate without padding: for a row's last column, so the line never
 /// reaches pane width (a full-width row wraps and double-spaces the list).
 fn clip_end(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max - 1).collect();
-        t.push('…');
-        t
+    if visible_len(s) <= max {
+        return s.to_string();
     }
+    let mut t = take_cells(s, max.saturating_sub(1));
+    t.push('…');
+    t
+}
+
+/// The first `max` cells of `s`, never cutting a glyph in two.
+///
+/// Cells, not characters. A thumbs-up is one character and two cells,
+/// and counting characters made a row a cell too long: it wrapped, and
+/// left a stray block at the start of the line below.
+fn take_cells(s: &str, max: usize) -> String {
+    let mut walker = crust::WidthWalker::new();
+    let mut out = String::new();
+    let mut w = 0;
+    for c in s.chars() {
+        let add = walker.push(c);
+        if w + add > max {
+            break;
+        }
+        w += add;
+        out.push(c);
+    }
+    out
 }
 
 /// Selection bar: a background that survives the full resets styled()
@@ -98,14 +117,17 @@ fn bg_row(line: &str, cols: u16, bg: u8) -> String {
 }
 
 fn clip(s: &str, max: usize) -> String {
-    let n = s.chars().count();
-    if n <= max {
-        format!("{:<width$}", s, width = max)
-    } else {
-        let mut t: String = s.chars().take(max - 1).collect();
-        t.push('…');
-        t
+    let w = visible_len(s);
+    if w <= max {
+        let mut t = s.to_string();
+        t.push_str(&" ".repeat(max - w));
+        return t;
     }
+    let mut t = take_cells(s, max.saturating_sub(1));
+    t.push('…');
+    let short = max.saturating_sub(visible_len(&t));
+    t.push_str(&" ".repeat(short));
+    t
 }
 
 fn main() {
@@ -876,8 +898,8 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
     // AGE and text column lines up. Clamped so a long route can't push
     // the text off the pane.
     let c1 = std::iter::once("INBOX".len())
-        .chain(items.iter().take(take).map(|i| i.label.chars().count().min(8)))
-        .chain(routes.iter().map(|r| r.chars().count()))
+        .chain(items.iter().take(take).map(|i| visible_len(&i.label).min(8)))
+        .chain(routes.iter().map(|r| visible_len(r)))
         .max()
         .unwrap_or(8)
         .clamp(8, 30);
@@ -1165,30 +1187,46 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
     pane.refresh();
 }
 
+/// How wide this is on screen, in cells, with any colour codes taken
+/// out. crust is the one authority on that, and it is what glass draws
+/// by, so a row measured here ends exactly where the terminal puts it.
 fn visible_len(s: &str) -> usize {
-    let mut n = 0;
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == 0x1b && i + 1 < b.len() && b[i + 1] == b'[' {
-            i += 2;
-            while i < b.len() && b[i] != b'm' {
-                i += 1;
-            }
-            i += 1;
-        } else {
-            if b[i] & 0xC0 != 0x80 {
-                n += 1; // count code points, not bytes (arrows, box chars)
-            }
-            i += 1;
-        }
-    }
-    n
+    crust::display_width(s)
 }
 
 fn pad(s: &mut String, target: usize) {
     let n = visible_len(s);
     if n < target {
         s.push_str(&" ".repeat(target - n));
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    #[test]
+    fn a_two_cell_emoji_counts_as_two() {
+        assert_eq!(visible_len("ok"), 2);
+        assert_eq!(visible_len("👍"), 2, "one character, two cells");
+        // The row that wrapped: a column padded to ten cells has to end
+        // at ten, whatever it holds.
+        assert_eq!(visible_len(&clip("👍", 10)), 10);
+        assert_eq!(visible_len(&clip("hello", 10)), 10);
+    }
+
+    #[test]
+    fn a_cut_never_lands_inside_a_glyph() {
+        let long = "👍👍👍👍";
+        let cut = clip_end(long, 5);
+        assert!(visible_len(&cut) <= 5, "cut to five cells, not five characters");
+        assert!(cut.ends_with('…'));
+        assert_eq!(clip_end("short", 10), "short", "what fits is left alone");
+    }
+
+    #[test]
+    fn colour_codes_are_not_counted() {
+        let painted = format!("\x1b[38;5;208m{}\x1b[0m", "abc");
+        assert_eq!(visible_len(&painted), 3);
     }
 }
