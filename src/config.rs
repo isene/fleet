@@ -35,6 +35,7 @@ pub struct Watch {
 pub struct SessionPref {
     pub ws: Option<u32>,      // 0-based; None = wherever fleet is
     pub bg: Option<String>,   // glass background hex, e.g. "#1a1a2e"
+    pub title: Option<String>, // window title, kept from Claude Code's own
 }
 
 pub struct Config {
@@ -86,6 +87,14 @@ impl Config {
         let mut have_inbox = false;
         if let Ok(text) = std::fs::read_to_string(home().join(".fleetrc")) {
             for line in text.lines() {
+                // `title <tag> <text>`: read before the comment cut, since
+                // a title may well hold a '#' ("#rust").
+                if let Some(rest) = line.strip_prefix("title ") {
+                    if let Some((tag, t)) = rest.trim().split_once(char::is_whitespace) {
+                        cfg.session_prefs.entry(tag.to_string()).or_default().title = Some(t.trim().to_string());
+                    }
+                    continue;
+                }
                 let line = line.split('#').next().unwrap_or("");
                 let f: Vec<&str> = line.split_whitespace().collect();
                 match f.as_slice() {
@@ -105,14 +114,12 @@ impl Config {
                         cfg.parked.insert(tag.to_string());
                     }
                     ["session", tag, ws] => {
-                        cfg.session_prefs.insert(tag.to_string(),
-                            SessionPref { ws: parse_ws(ws), bg: None });
+                        cfg.session_prefs.entry(tag.to_string()).or_default().ws = parse_ws(ws);
                     }
                     ["session", tag, ws, bg] => {
-                        cfg.session_prefs.insert(tag.to_string(), SessionPref {
-                            ws: parse_ws(ws),
-                            bg: Some(bg.trim_start_matches('#').to_string()),
-                        });
+                        let p = cfg.session_prefs.entry(tag.to_string()).or_default();
+                        p.ws = parse_ws(ws);
+                        p.bg = Some(bg.trim_start_matches('#').to_string());
                     }
                     _ => {}
                 }
@@ -134,8 +141,9 @@ impl Config {
     }
 }
 
-/// Update-or-insert the `session <tag> ...` line in ~/.fleetrc, keeping
-/// every other line. A pref with neither ws nor bg removes the line.
+/// Update-or-insert the `session <tag> ...` and `title <tag> ...` lines
+/// in ~/.fleetrc, keeping every other line. A part left empty removes
+/// its line.
 /// Atomic (temp + rename) so a reload never sees a half-written file.
 pub fn write_session_pref(tag: &str, pref: &SessionPref) {
     let path = home().join(".fleetrc");
@@ -144,8 +152,12 @@ pub fn write_session_pref(tag: &str, pref: &SessionPref) {
         .unwrap_or_default();
     lines.retain(|l| {
         let f: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
-        !(f.len() >= 2 && f[0] == "session" && f[1] == tag)
+        let titled = l.strip_prefix("title ").is_some_and(|r| r.split_whitespace().next() == Some(tag));
+        !(f.len() >= 2 && f[0] == "session" && f[1] == tag) && !titled
     });
+    if let Some(t) = pref.title.as_ref().filter(|t| !t.is_empty()) {
+        lines.push(format!("title {} {}", tag, t));
+    }
     if pref.ws.is_some() || pref.bg.is_some() {
         let ws = pref.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "-".into());
         let mut line = format!("session {} {}", tag, ws);
@@ -198,4 +210,29 @@ pub fn glob_match(pat: &str, name: &str) -> bool {
         }
     }
     rec(pat.as_bytes(), name.as_bytes())
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn a_title_with_a_hash_survives_a_write_and_a_load() {
+        let dir = std::env::temp_dir().join(format!("fleet-title-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        std::fs::write(dir.join(".fleetrc"), "session rust 3 280800\nparked x\n").unwrap();
+        let mut p = Config::load().session_prefs.remove("rust").unwrap();
+        p.title = Some("#rust work".into());
+        write_session_pref("rust", &p);
+        let back = Config::load().session_prefs.remove("rust").unwrap();
+        assert_eq!(back.title.as_deref(), Some("#rust work"));
+        assert_eq!((back.ws, back.bg.as_deref()), (Some(2), Some("280800")));
+        p.title = None;
+        write_session_pref("rust", &p);
+        let text = std::fs::read_to_string(dir.join(".fleetrc")).unwrap();
+        assert!(!text.contains("title"), "{text}");
+        assert!(text.contains("parked x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

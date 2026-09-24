@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, KeyButMask,
-    KeyPressEvent, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
+    KeyPressEvent, PropMode, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 pub struct WinMap {
     conn: RustConnection,
@@ -122,6 +123,17 @@ impl WinMap {
             }
         }
         out
+    }
+
+    /// Name a window: both WM_NAME and _NET_WM_NAME, since strip reads
+    /// the second first and glass only sets the first.
+    pub fn set_title(&self, xid: u32, title: &str) {
+        let (Some(net_name), Some(utf8)) = (intern(&self.conn, b"_NET_WM_NAME"), intern(&self.conn, b"UTF8_STRING")) else {
+            return;
+        };
+        let _ = self.conn.change_property8(PropMode::REPLACE, xid, AtomEnum::WM_NAME, AtomEnum::STRING, title.as_bytes());
+        let _ = self.conn.change_property8(PropMode::REPLACE, xid, net_name, utf8, title.as_bytes());
+        let _ = self.conn.flush();
     }
 
     /// Show and focus a window: the EWMH _NET_ACTIVE_WINDOW ClientMessage

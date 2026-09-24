@@ -653,6 +653,29 @@ fn main() {
                     }
                 }
             }
+            Some("t") if focus == Focus::Sessions => {
+                // The window title, prefilled with what it carries now.
+                // Empty goes back to #tag. A live window is renamed at once.
+                if let Some(s) = sess.get(sel_s) {
+                    let tag = s.tag.clone();
+                    let mut pref = cfg.session_prefs.get(&tag).cloned().unwrap_or_default();
+                    let init = session_title(s, Some(&pref)).unwrap_or_default();
+                    let mut p = Pane::new(1, rows, cols, 1, 231, 236);
+                    if let Some(a) = p.ask_or_cancel(&format!("title for {} (empty = #{}): ", tag, tag), &init) {
+                        let a = a.trim().to_string();
+                        pref.title = if a.is_empty() || a == format!("#{}", tag) { None } else { Some(a) };
+                        config::write_session_pref(&tag, &pref);
+                        cfg = Config::load();
+                        let now = session_title(s, cfg.session_prefs.get(&tag));
+                        if let (Some(wmc), Some(pid), Some(t)) = (wm.as_ref(), s.pid, &now) {
+                            if let Some(xid) = sessions::window_ancestor(pid, &wmc.pid_windows()) {
+                                wmc.set_title(xid, t);
+                            }
+                        }
+                        flash = format!("{} titled {}", tag, now.unwrap_or_default());
+                    }
+                }
+            }
             Some("b") if focus == Focus::Sessions => {
                 // Pick this session's glass background with prism. prism
                 // writes the hex to --out so its TUI keeps the terminal.
@@ -1016,6 +1039,16 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     if let Some(bg) = pref.and_then(|p| p.bg.as_ref()) {
         c.env("GLASS_BG", bg);
     }
+    // The window title: the one set with t, or #tag. A small sh names
+    // the window before Claude Code starts, and Claude Code is told to
+    // leave the name alone.
+    let title = session_title(s, pref);
+    if let Some(t) = &title {
+        c.env("FLEET_TITLE", style::title_seq(t));
+        c.env("CLAUDE_CODE_DISABLE_TERMINAL_TITLE", "1");
+        c.args(["-e", "/bin/sh", "-c", "printf %s \"$FLEET_TITLE\"; exec \"$@\"", "sh"]);
+    }
+    let flag = |c: &mut Command| if title.is_none() { c.arg("-e"); };
     // Resume by name only while the name belongs to this session alone.
     // `c <tag>` opens the first bookmark carrying the tag, so a name
     // left on a second, usually long-dead session opens that one and it
@@ -1032,13 +1065,15 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
         let Some(bin) = which(resumer) else {
             return format!("session resumer '{}' not in PATH", resumer);
         };
-        c.args(["-e", &bin, &s.tag]);
+        flag(&mut c);
+        c.args([&bin, &s.tag]);
     } else {
         let resumer = if gateway { "cck" } else { "claude" };
         let Some(bin) = which(resumer) else {
             return format!("'{}' not in PATH", resumer);
         };
-        c.args(["-e", &bin, "--resume", &s.id]);
+        flag(&mut c);
+        c.args([&bin, "--resume", &s.id]);
         if !s.cwd.is_empty() {
             c.current_dir(&s.cwd);
         }
@@ -1051,6 +1086,14 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
         Ok(_) => format!("resuming {} in a new glass", s.tag),
         Err(e) => format!("glass failed: {}", e),
     }
+}
+
+/// The title a session's window carries: the one set with t, else #tag
+/// for a tagged session, else none (Claude Code names it).
+fn session_title(s: &Session, pref: Option<&config::SessionPref>) -> Option<String> {
+    pref.and_then(|p| p.title.clone())
+        .filter(|t| !t.is_empty())
+        .or_else(|| s.tagged.then(|| format!("#{}", s.tag)))
 }
 
 /// The full bus traffic log in a scrollable popup, newest first.
@@ -1145,6 +1188,7 @@ fn help() {
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));
+    t.push_str(&format!("{}set its window title (default #tag)\n", key("t")));
     t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
     t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));
     t.push_str(&format!(" {}\n", hdr("INBOX")));

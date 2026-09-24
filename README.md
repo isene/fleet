@@ -67,6 +67,9 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `b` on a session: pick its glass background with `prism`, preloaded
   with the current colour. Saved to `~/.fleetrc`, applied next resume
   via the `GLASS_BG` env
+- `t` on a session: set its window title, `#tag` when left empty. An open
+  window is renamed at once. A resumed one starts with the title, and
+  Claude Code is told to keep it (`CLAUDE_CODE_DISABLE_TERMINAL_TITLE`)
 - `k` stop the selected session (SIGTERM; `K` forces): it goes "off"
   and stays resumable with Enter. A parked session loses its parking
   here, since "off" is what the row should say
