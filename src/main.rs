@@ -377,6 +377,9 @@ fn main() {
                     rollup_rows.is_some(), &msg_to, &msg_buf);
 
         let key = Input::getchr(Some(2));
+        if key.is_some() {
+            unpaint();
+        }
         let k = key.as_deref();
         flash.clear();
 
@@ -742,6 +745,48 @@ fn main() {
     Crust::cleanup();
 }
 
+thread_local! {
+    /// What each screen spot showed at its last paint, keyed by pane
+    /// geometry, so a resize never matches an old entry.
+    static PAINTED: std::cell::RefCell<std::collections::HashMap<(u16, u16, u16, u16), String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Paint a pane only when its text differs from what that spot showed
+/// last time. Most 2 s ticks change nothing, and every skipped paint also
+/// spares glass and frame a redraw. Battery sweep, 2026-09-25.
+fn paint(pane: &mut Pane, text: &str) {
+    let key = (pane.x, pane.y, pane.w, pane.h);
+    let old = PAINTED.with(|p| p.borrow().get(&key).cloned());
+    match old {
+        Some(o) if o == text => return,
+        // Same shape: repaint only the lines that changed. A working
+        // session moves its age every tick, and one changed number must
+        // not cost the whole list.
+        Some(o) if o.lines().count() == text.lines().count() => {
+            for (i, (a, b)) in o.lines().zip(text.lines()).enumerate() {
+                if a != b {
+                    let mut row = Pane::new(pane.x, pane.y + i as u16, pane.w, 1, pane.fg, pane.bg);
+                    row.set_text(b);
+                    row.refresh();
+                }
+            }
+        }
+        _ => {
+            pane.set_text(text);
+            pane.refresh();
+        }
+    }
+    PAINTED.with(|p| {
+        p.borrow_mut().insert(key, text.to_string());
+    });
+}
+
+/// Forget every paint, so the next tick draws the whole screen again.
+fn unpaint() {
+    PAINTED.with(|p| p.borrow_mut().clear());
+}
+
 fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) {
     // Darker than the column-header bars (236), so the two read apart.
     let mut pane = Pane::new(1, 1, cols, 1, 255, 234);
@@ -755,8 +800,7 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) 
         line.push_str(&format!("  ·  {}", rates));
     }
     pad(&mut line, cols as usize);
-    pane.set_text(&line);
-    pane.refresh();
+    paint(&mut pane, &line);
 }
 
 /// Usage percentages, statusline-style: "[4%/28%(51%) Fri 21:00]".
@@ -888,8 +932,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
         out.push_str(&line);
         out.push('\n');
     }
-    pane.set_text(out.trim_end_matches('\n'));
-    pane.refresh();
+    paint(&mut pane, out.trim_end_matches('\n'));
 }
 
 fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
@@ -984,8 +1027,7 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
         }
         out.push('\n');
     }
-    pane.set_text(out.trim_end_matches('\n'));
-    pane.refresh();
+    paint(&mut pane, out.trim_end_matches('\n'));
 }
 
 /// Switch to the session's workspace. Without an X connection, name the
@@ -1172,8 +1214,7 @@ fn draw_rollup(cols: u16, y: u16, h: u16, rows: &[rollup::Row]) {
     out.push_str(&style::styled(
         &format!(" {:<12}  {:>8}k  {:>8}k", "TOTAL", o / 1000, i / 1000),
         Some(250), None, "b"));
-    pane.set_text(&out);
-    pane.refresh();
+    paint(&mut pane, &out);
 }
 
 /// Bordered, blocking help viewer (crust Popup): ESC / q / ENTER closes.
@@ -1227,8 +1268,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
     let pad_n = (cols as usize).saturating_sub(visible_len(&line) + right.len());
     line.push_str(&" ".repeat(pad_n));
     line.push_str(&right);
-    pane.set_text(&line);
-    pane.refresh();
+    paint(&mut pane, &line);
 }
 
 /// How wide this is on screen, in cells, with any colour codes taken
