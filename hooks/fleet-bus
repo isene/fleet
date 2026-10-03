@@ -4,6 +4,13 @@
 UserPromptSubmit hook: pending messages for this session are injected as
 additional context on the user's next prompt, then consumed.
 
+Stop hook: the same messages are handed over when a turn ends, so a
+session that is already working reads its mail without a "Check fleet
+messages" prompt (184 of 1,496 prompts in 14 days were that line). Only
+once per turn: when the stop is already a continuation, messages wait for
+the next prompt, which keeps two sessions from answering each other
+forever with nobody in between.
+
 Addressing: a message to session X is a file in ~/.fleet/bus/<addr>/
 where <addr> is X's CC-sessions bookmark tag, or its raw session id.
 Anyone can send: fleet's `m` key does, and any Claude session can just
@@ -40,6 +47,9 @@ def main():
         return
     data = json.load(sys.stdin)
     sid = data.get("session_id") or ""
+    stop = data.get("hook_event_name") == "Stop"
+    if stop and data.get("stop_hook_active"):
+        return  # one delivery per turn; the rest waits for a prompt
     msgs = []
     for root in ROOTS:
         for addr in sorted(addrs(sid)):
@@ -69,6 +79,11 @@ def main():
     ctx = ("Messages delivered via the fleet bus (from other local "
            "sessions or the fleet TUI):\n"
            + "\n".join(f"- {m}" for _, m in msgs))
+    if stop:
+        json.dump({"decision": "block",
+                   "reason": ctx + "\n\nDeal with these before you stop."},
+                  sys.stdout)
+        return
     json.dump({"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
         "additionalContext": ctx}}, sys.stdout)

@@ -53,6 +53,12 @@ impl WinMap {
             .and_then(|v| v.first().copied())
     }
 
+    /// The window that has the keyboard (root's _NET_ACTIVE_WINDOW).
+    pub fn active_window(&self) -> Option<u32> {
+        self.get_atom_array(self.root, self.atom_active, AtomEnum::WINDOW.into())
+            .and_then(|v| v.first().copied())
+    }
+
     /// Build a {pid → workspace_index} map. Tries _NET_CLIENT_LIST
     /// first (EWMH-standard, what most WMs publish) and falls back
     /// to walking root's direct children via QueryTree (works on

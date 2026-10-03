@@ -66,6 +66,10 @@ pub struct Session {
     pub pid: Option<u32>,
     pub ws: Option<u32>,
     pub ctx_k: Option<u64>,
+    /// The transcript ends on a finished answer: Claude waits at its
+    /// prompt. False during a turn and while a permission dialog is up,
+    /// where a typed line could land on the wrong thing.
+    pub at_prompt: bool,
 }
 
 #[derive(Clone, Default)]
@@ -223,6 +227,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 pid,
                 ws: None,
                 ctx_k: info.ctx_k,
+                at_prompt: info.last == 'a' && !info.turn_open,
             });
         }
     }

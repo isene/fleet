@@ -7,6 +7,8 @@
 //!   ctx_window_k N                 context window in k tokens (default 1000);
 //!                                  CTX turns yellow at 50 % and red at 75 %
 //!                                  of it, like the CC statusline
+//!   autowake <tag>                 fleet asks this session to check its
+//!                                  messages as soon as one lands (key a)
 //!   parked <tag>                   a session to leave alone: listed, but
 //!                                  not counted and sorted to the bottom
 //!   session <tag> <ws> [bg]        where a resumed session's glass opens
@@ -48,6 +50,8 @@ pub struct Config {
     /// Tags the user has told fleet to stop nagging about. Cleared the
     /// moment such a session starts working again.
     pub parked: HashSet<String>,
+    /// Sessions fleet wakes by itself when a bus message lands for them.
+    pub autowake: HashSet<String>,
 }
 
 /// A 1-based workspace field from the config ('-' = none) to 0-based.
@@ -83,6 +87,7 @@ impl Config {
             ctx_window_k: 1000,
             session_prefs: HashMap::new(),
             parked: HashSet::new(),
+            autowake: HashSet::new(),
         };
         let mut have_inbox = false;
         if let Ok(text) = std::fs::read_to_string(home().join(".fleetrc")) {
@@ -112,6 +117,9 @@ impl Config {
                     ["inbox_days", n] => cfg.inbox_days = n.parse().unwrap_or(cfg.inbox_days),
                     ["parked", tag] => {
                         cfg.parked.insert(tag.to_string());
+                    }
+                    ["autowake", tag] => {
+                        cfg.autowake.insert(tag.to_string());
                     }
                     ["session", tag, ws] => {
                         cfg.session_prefs.entry(tag.to_string()).or_default().ws = parse_ws(ws);
@@ -178,18 +186,27 @@ pub fn write_session_pref(tag: &str, pref: &SessionPref) {
 /// when the user parks a session and when a parked one starts working,
 /// so it is a handful of writes a day rather than one per tick.
 pub fn write_parked(parked: &HashSet<String>) {
+    write_tags("parked", parked);
+}
+
+/// The same for `autowake` lines, written when `a` toggles a session.
+pub fn write_autowake(tags: &HashSet<String>) {
+    write_tags("autowake", tags);
+}
+
+fn write_tags(key: &str, parked: &HashSet<String>) {
     let path = home().join(".fleetrc");
     let mut lines: Vec<String> = std::fs::read_to_string(&path)
         .map(|t| t.lines().map(String::from).collect())
         .unwrap_or_default();
     lines.retain(|l| {
         let f: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
-        !(f.len() >= 2 && f[0] == "parked")
+        !(f.len() >= 2 && f[0] == key)
     });
     let mut tags: Vec<&String> = parked.iter().collect();
     tags.sort();
     for t in tags {
-        lines.push(format!("parked {}", t));
+        lines.push(format!("{} {}", key, t));
     }
     let tmp = path.with_extension("fleetrc.tmp");
     let body = lines.join("\n") + "\n";

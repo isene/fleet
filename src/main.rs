@@ -257,6 +257,10 @@ fn main() {
     // (tag, not before, give up). One that had to be resumed needs a few
     // seconds of Claude Code start-up before it can take a prompt.
     let mut wake: Option<(String, std::time::Instant, std::time::Instant)> = None;
+    // Auto-wake bookkeeping: messages already acted on, and when each
+    // session was last woken by fleet itself.
+    let mut auto_woken: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut auto_times: std::collections::HashMap<String, Vec<std::time::Instant>> = std::collections::HashMap::new();
 
     loop {
         let map = wm.as_ref().map(|w| w.refresh()).unwrap_or_default();
@@ -330,6 +334,46 @@ fn main() {
             focus = Focus::Sessions;   // the last item vanished under us
         }
 
+        // Auto-wake: a session marked with `a` is asked to check its
+        // messages the moment one lands, with nobody pressing Enter. It
+        // rides on the pending list this tick already built, so it adds
+        // no polling. The guards: Claude must sit at its prompt (never
+        // mid-turn, never on a permission dialog), the window must not
+        // have the keyboard (you may be typing there), each message wakes
+        // once, and a session gets at most 4 wakes in 30 minutes, so two
+        // sessions cannot answer each other without end.
+        auto_woken.retain(|p| logs.iter().any(|e| e.path.as_deref() == Some(p.as_path())));
+        if wake.is_none() && !cfg.autowake.is_empty() {
+            let now_i = std::time::Instant::now();
+            let half_hour = std::time::Duration::from_secs(1800);
+            for e in &logs {
+                let Some(path) = &e.path else { continue };
+                if !cfg.autowake.contains(&e.dest) || auto_woken.contains(path) {
+                    continue;
+                }
+                let Some(s) = sess.iter().find(|s| s.tag == e.dest) else { continue };
+                let (Some(pid), Some(c)) = (s.pid, wm.as_ref()) else { continue };
+                if !s.at_prompt || matches!(s.state, State::Working | State::Capped) {
+                    continue;
+                }
+                let Some(xid) = sessions::window_ancestor(pid, &c.pid_windows()) else { continue };
+                if c.active_window() == Some(xid) {
+                    continue;   // you are in that window; try again next tick
+                }
+                let times = auto_times.entry(e.dest.clone()).or_default();
+                times.retain(|t| now_i.duration_since(*t) < half_hour);
+                if times.len() >= 4 {
+                    flash = format!("{} auto-wake paused: 4 in 30 min", e.dest);
+                    auto_woken.insert(path.clone());
+                    continue;
+                }
+                times.push(now_i);
+                auto_woken.insert(path.clone());
+                wake = Some((e.dest.clone(), now_i, now_i + std::time::Duration::from_secs(30)));
+                break;
+            }
+        }
+
         // Type the prompt into a woken session once it has a window and
         // has had time to start. The X client list is only walked while a
         // wake is pending, so an idle fleet keeps doing nothing.
@@ -362,7 +406,7 @@ fn main() {
         } else {
             draw_sessions(cols, 2, sess_h as u16, &sess,
                           focus == Focus::Sessions, sel_s, &marked_s,
-                          cfg.ctx_window_k);
+                          cfg.ctx_window_k, &cfg.autowake);
             // The addresses the bus can actually deliver to: the tags of
             // bookmarked sessions. A message signed with anything else
             // carries a return address that leads nowhere.
@@ -589,6 +633,22 @@ fn main() {
                     let addr = if s.tagged { s.tag.clone() } else { s.id.clone() };
                     msg_to = Some((addr, s.tag.clone()));
                     msg_buf.clear();
+                }
+            }
+            Some("a") if focus == Focus::Sessions => {
+                // Auto-wake on or off for this session. Only a bookmarked
+                // session has a bus address to be woken for.
+                if let Some(s) = sess.get(sel_s) {
+                    let tag = s.tag.clone();
+                    flash = if !s.tagged {
+                        format!("{} has no bookmark, so no mailbox", tag)
+                    } else if cfg.autowake.remove(&tag) {
+                        format!("{} auto-wake off", tag)
+                    } else {
+                        cfg.autowake.insert(tag.clone());
+                        format!("{} auto-wake on", tag)
+                    };
+                    config::write_autowake(&cfg.autowake);
                 }
             }
             Some("p") if focus == Focus::Sessions => {
@@ -888,7 +948,8 @@ fn ctx_color(k: u64, window_k: u64) -> u8 {
 }
 
 fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
-                 sel: usize, marked: &[std::path::PathBuf], window_k: u64) {
+                 sel: usize, marked: &[std::path::PathBuf], window_k: u64,
+                 auto: &std::collections::HashSet<String>) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let hdr = format!(
         " {:<w$}  {:<7}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
@@ -902,10 +963,12 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
         let line = format!(
-            " {}  {}  {}  {:>2}  {}  {}  {}",
+            " {} {}{}  {}  {:>2}  {}  {}  {}",
             // Bookmarked tags magenta like the statusline; unbookmarked
             // sessions show their directory name in light gray.
             style::fg(&clip(&s.tag, TAG_W), if s.tagged { 13 } else { 250 }),
+            // » marks a session fleet wakes by itself (the `a` key).
+            if auto.contains(&s.tag) { style::fg("»", 208) } else { " ".into() },
             style::styled(&format!("{:<7}", s.state.label()),
                           Some(state_color(s.state)), None,
                           if s.state == State::Yours { "b" } else { "" }),
@@ -1226,6 +1289,7 @@ fn help() {
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
     t.push_str(&format!("{}park it: listed, uncounted, up top\n", key("p")));
+    t.push_str(&format!("{}auto-wake: check messages by itself (»)\n", key("a")));
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));

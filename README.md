@@ -77,6 +77,10 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   stays listed, drops out of the YOURS and working counts, and sorts to
   the top as a block that does not move. Work clears it: the moment that
   session is busy again it shows as working, and the parking is gone
+- `a` auto-wake for the selected session, on or off (shown as `»`).
+  When a bus message lands for it, fleet asks it to check its messages
+  by itself. Only while Claude waits at its prompt, never in the window
+  you are typing in, and at most 4 times in 30 minutes
 - `c` today's token rollup per session (Esc back)
 - `o` / `Enter` on an inbox item: open it
 - `o` / `Enter` on a `msg` row: hand the message to the session it is
@@ -124,6 +128,17 @@ and add it to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 ```
 
 When idle the hook is one stat of a usually absent directory.
+
+The same hook can also run under `hooks.Stop`. A session that is already
+working then gets its messages when its turn ends, with no prompt from
+you. It delivers once per turn, so two sessions cannot keep answering
+each other. The shell test in front skips Python when no mailbox holds
+anything:
+
+```json
+{ "type": "command", "timeout": 10,
+  "command": "sh -c 'for f in \"$HOME\"/.fleet/bus/*/* \"$HOME\"/.fleet/relay/*/*; do [ -f \"$f\" ] && exec \"$HOME\"/.claude/hooks/fleet-bus; done; exit 0'" }
+```
 
 ## Configuration
 
