@@ -444,7 +444,7 @@ fn main() {
                     msg_to = None;
                     msg_buf.clear();
                 }
-                Some("BACKSPACE") => {
+                Some("BACK") => {
                     msg_buf.pop();
                 }
                 Some(s) if s.chars().count() == 1 => msg_buf.push_str(s),
