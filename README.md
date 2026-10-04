@@ -82,7 +82,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   by itself. Only while Claude waits at its prompt, never in the window
   you are typing in, and at most 4 times in 30 minutes
 - `c` today's token rollup per session (Esc back)
-- `o` / `Enter` on an inbox item: open it
+- `o` / `Enter` on an inbox item: open it. A program that runs in a
+  terminal (an editor, a PDF reader) gets a glass of its own
 - `o` / `Enter` on a `msg` row: hand the message to the session it is
   for. A live session is told to read its mail right away; one that is
   off or old is resumed in a fresh glass first, then told once it is up

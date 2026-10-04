@@ -514,13 +514,7 @@ fn main() {
                 }
                 Focus::Inbox => {
                     if let Some(i) = items.get(sel_i) {
-                        let _ = Command::new("xdg-open")
-                            .arg(&i.path)
-                            .stdin(Stdio::null())   // same pty leak as resurrect
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .spawn();
-                        flash = format!("opened {}", i.name);
+                        flash = open_file(&i.path, &i.name);
                     } else if let Some(e) = logs.get(sel_i - items.len()) {
                         // A message row: hand it to the session it is for.
                         // A live one is prodded now; one that is off or old
@@ -1117,6 +1111,87 @@ fn which(cmd: &str) -> Option<String> {
     None
 }
 
+/// Enter on an inbox file: open it in the program the desktop names for
+/// that kind of file.
+///
+/// A terminal program (an editor for text, a reader for a PDF) gets a
+/// glass of its own. Handed to xdg-open it started unseen on fleet's own
+/// terminal and took every other key from fleet, until fleet was closed.
+/// Everything else goes to xdg-open, in a session of its own (setsid), so
+/// whatever it starts has no terminal to read keys from.
+fn open_file(path: &std::path::Path, name: &str) -> String {
+    let mut c = Command::new("setsid");
+    match terminal_handler(path) {
+        Some(exec) => {
+            c.args(["glass", "-e", "/bin/sh", "-c", &format!("exec {}", exec), "sh"]).arg(path);
+        }
+        None => {
+            c.arg("xdg-open").arg(path);
+        }
+    }
+    match c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        Ok(_) => format!("opened {}", name),
+        Err(e) => format!("could not open {}: {}", name, e),
+    }
+}
+
+/// The command line of the program that opens `path`, when that program
+/// runs in a terminal (Terminal=true in its menu entry); the file is "$1"
+/// in it. None for a window program, and when nothing is set for the file.
+/// Two short xdg-mime runs, on Enter only.
+fn terminal_handler(path: &std::path::Path) -> Option<String> {
+    let ask = |args: &[&std::ffi::OsStr]| -> Option<String> {
+        let out = Command::new("xdg-mime").args(args).stderr(Stdio::null()).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !text.is_empty()).then_some(text)
+    };
+    let kind = ask(&["query".as_ref(), "filetype".as_ref(), path.as_os_str()])?;
+    let entry = ask(&["query".as_ref(), "default".as_ref(), kind.as_ref()])?;
+    let own = std::env::var("XDG_DATA_HOME")
+        .unwrap_or_else(|_| format!("{}/.local/share", std::env::var("HOME").unwrap_or_default()));
+    let text = [
+        format!("{}/applications", own),
+        "/usr/local/share/applications".to_string(),
+        "/usr/share/applications".to_string(),
+    ]
+    .iter()
+    .find_map(|dir| std::fs::read_to_string(format!("{}/{}", dir, entry)).ok())?;
+    terminal_exec(&text)
+}
+
+/// The Exec line of a menu entry that says Terminal=true, with the file
+/// as "$1" and the other % codes taken out.
+fn terminal_exec(entry: &str) -> Option<String> {
+    let value = |key: &str| {
+        entry.lines().find_map(|l| l.trim().strip_prefix(key)).map(|v| v.trim().to_string())
+    };
+    if !value("Terminal=")?.eq_ignore_ascii_case("true") {
+        return None;
+    }
+    let exec = value("Exec=")?;
+    let mut out = String::new();
+    let mut file = false;
+    let mut chars = exec.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('f' | 'F' | 'u' | 'U') => {
+                out.push_str("\"$1\"");
+                file = true;
+            }
+            Some('%') => out.push('%'),
+            _ => {}
+        }
+    }
+    if !file {
+        out.push_str(" \"$1\"");
+    }
+    Some(out)
+}
+
 /// A session with no window on this display: resume it in a fresh glass.
 /// Tagged sessions go through `c <tag>` (CC-sessions: path + auto-follow);
 /// untagged ones get a plain resume in their own working directory.
@@ -1346,6 +1421,26 @@ fn pad(s: &mut String, target: usize) {
     let n = visible_len(s);
     if n < target {
         s.push_str(&" ".repeat(target - n));
+    }
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_terminal_program_gets_a_glass() {
+        let entry = |terminal: &str, exec: &str| {
+            format!("[Desktop Entry]\nName=X\nExec={}\nTerminal={}\n", exec, terminal)
+        };
+        assert_eq!(terminal_exec(&entry("true", "scribe %f")).as_deref(), Some("scribe \"$1\""));
+        assert_eq!(terminal_exec(&entry("true", "vim")).as_deref(), Some("vim \"$1\""));
+        assert_eq!(
+            terminal_exec(&entry("true", "reader --name %c %U")).as_deref(),
+            Some("reader --name  \"$1\"")
+        );
+        assert_eq!(terminal_exec(&entry("false", "viewer %f")), None);
+        assert_eq!(terminal_exec("[Desktop Entry]\nExec=viewer %f\n"), None);
     }
 }
 
