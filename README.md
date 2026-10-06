@@ -12,6 +12,26 @@ land (screenshots, phone transfers). Part of the
 
 <br clear="left"/>
 
+## Sessions that work together
+
+Sessions send each other messages, and act on them, with no relay from
+you. One session finds a fault in another project and writes to the
+session that owns it. That session gets the message when its turn ends,
+or when fleet wakes it at its prompt. Then it starts on the job.
+
+You stop carrying messages between your own sessions. More gets done at
+once, and you steer less of it by hand.
+
+What keeps you in charge:
+
+- every message shows in the INBOX pane, and `M` lists them all
+- auto-wake is set per session with `a`, at most 4 times in 30 minutes
+- a session gets its messages once per turn, so two sessions cannot keep
+  answering each other
+- fleet never types into the window you are working in
+
+Set it up under [Message bus](#message-bus).
+
 ## Why
 
 Running several Claude Code sessions in parallel means losing track of
