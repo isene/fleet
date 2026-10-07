@@ -799,11 +799,32 @@ fn main() {
     Crust::cleanup();
 }
 
+/// A pane's place on screen: x, y, width, height.
+type Area = (u16, u16, u16, u16);
+
 thread_local! {
     /// What each screen spot showed at its last paint, keyed by pane
     /// geometry, so a resize never matches an old entry.
-    static PAINTED: std::cell::RefCell<std::collections::HashMap<(u16, u16, u16, u16), String>> =
+    static PAINTED: std::cell::RefCell<std::collections::HashMap<Area, String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// True when two panes share a cell.
+fn overlaps(a: Area, b: Area) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+}
+
+/// Note what a pane now shows, and forget every other pane that had some
+/// of the same cells: what those remember is no longer on the screen.
+///
+/// The inbox grows and shrinks with its items, and the session list takes
+/// the rows it leaves. A memory kept from the last time a pane had this
+/// size said "unchanged" for lines the other pane had since painted over,
+/// so an old inbox header stayed above the list until the sizes changed
+/// again.
+fn remember(map: &mut std::collections::HashMap<Area, String>, key: Area, text: &str) {
+    map.retain(|k, _| *k == key || !overlaps(*k, key));
+    map.insert(key, text.to_string());
 }
 
 /// Paint a pane only when its text differs from what that spot showed
@@ -831,9 +852,7 @@ fn paint(pane: &mut Pane, text: &str) {
             pane.refresh();
         }
     }
-    PAINTED.with(|p| {
-        p.borrow_mut().insert(key, text.to_string());
-    });
+    PAINTED.with(|p| remember(&mut p.borrow_mut(), key, text));
 }
 
 /// Forget every paint, so the next tick draws the whole screen again.
@@ -1421,6 +1440,37 @@ fn pad(s: &mut String, target: usize) {
     let n = visible_len(s);
     if n < target {
         s.push_str(&" ".repeat(target - n));
+    }
+}
+
+#[cfg(test)]
+mod paint_tests {
+    use super::*;
+
+    /// The inbox gains an item: it gets a row taller and the session list
+    /// a row shorter. Neither pane may keep what it showed at its old
+    /// size, since the other now paints on some of those rows.
+    #[test]
+    fn a_pane_painted_over_is_forgotten() {
+        let mut map = std::collections::HashMap::new();
+        let (list_2, inbox_2) = ((1, 2, 80, 50), (1, 52, 80, 4));
+        let (list_3, inbox_3) = ((1, 2, 80, 49), (1, 51, 80, 5));
+        let (header, footer) = ((1, 1, 80, 1), (1, 56, 80, 1));
+        for (area, text) in [(header, "h"), (list_2, "a"), (inbox_2, "b"), (footer, "f")] {
+            remember(&mut map, area, text);
+        }
+        remember(&mut map, list_3, "c");
+        remember(&mut map, inbox_3, "d");
+        assert!(!map.contains_key(&list_2), "the taller list was painted over");
+        assert!(!map.contains_key(&inbox_2), "the shorter inbox was painted over");
+        // Panes that share no row keep their memory: no repaint for them.
+        assert_eq!(map.get(&header).map(String::as_str), Some("h"));
+        assert_eq!(map.get(&footer).map(String::as_str), Some("f"));
+        assert_eq!(map.len(), 4);
+        // The same pane painted again only replaces its own entry.
+        remember(&mut map, inbox_3, "e");
+        assert_eq!(map.get(&inbox_3).map(String::as_str), Some("e"));
+        assert_eq!(map.len(), 4);
     }
 }
 
