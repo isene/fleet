@@ -134,10 +134,11 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("fleet — Claude Code mission control (Fe2O3 suite)");
         println!();
-        println!("Usage: fleet [--list | --today | --wake TAG]");
+        println!("Usage: fleet [--list | --today | --moves | --wake TAG]");
         println!();
         println!("  --list     print sessions and inbox as text and exit");
         println!("  --today    print today's token rollup per session and exit");
+        println!("  --moves    print what each session waits for you to decide and exit");
         println!("  --wake TAG type the check-messages prompt into that open session and exit");
         println!();
         println!("Sessions with state (working / YOURS / CAPPED / idle / off), workspace and");
@@ -163,6 +164,17 @@ fn main() {
             inp += r.in_tokens;
         }
         println!("{:<12} {:>7}k out  {:>6}k in", "TOTAL", out / 1000, inp / 1000);
+        return;
+    }
+
+    if std::env::args().skip(1).any(|a| a == "--moves") {
+        let rows = move_rows(&sessions::scan(&cfg, &mut cache));
+        if rows.is_empty() {
+            println!("no open moves");
+        }
+        for r in rows {
+            println!("{}", r);
+        }
         return;
     }
 
@@ -787,6 +799,7 @@ fn main() {
             }
             Some("?") | Some("h") => help(),
             Some("M") => show_log(),
+            Some("v") => show_moves(&sess),
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
                 cols = c;
@@ -867,6 +880,10 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) 
     let working = sess.iter().filter(|s| s.state == State::Working).count();
     let mut line = format!(" {}  ", style::bold("fleet"));
     line.push_str(&style::styled(&format!("{} YOURS", yours), Some(208), None, "b"));
+    let moves: usize = sess.iter().map(|s| s.moves.len()).sum();
+    if moves > 0 {
+        line.push_str(&format!("  ·  {} {}", moves, if moves == 1 { "move" } else { "moves" }));
+    }
     line.push_str(&format!("  ·  {} working  ·  {} sessions", working, sess.len()));
     line.push_str(&format!("  ·  inbox {}", items.len()));
     if !rates.is_empty() {
@@ -1316,6 +1333,40 @@ fn show_log() {
     Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
 }
 
+/// One row per "Your move:" line a session's last answer left open.
+fn move_rows(sess: &[Session]) -> Vec<String> {
+    let w = sess.iter()
+        .filter(|s| !s.moves.is_empty())
+        .map(|s| s.tag.chars().count())
+        .max()
+        .unwrap_or(0);
+    sess.iter()
+        .flat_map(|s| s.moves.iter().map(move |m| {
+            format!("{:<w$} {:>6}  {}", s.tag, fmt_age(s.age_secs), m, w = w)
+        }))
+        .collect()
+}
+
+/// What every session waits for the user to do or decide, in a popup.
+/// The rows come from the tails the scan already read: no file is opened.
+fn show_moves(sess: &[Session]) {
+    let rows = move_rows(sess);
+    let mut t = String::new();
+    if rows.is_empty() {
+        t.push_str(" no open moves");
+    }
+    for r in &rows {
+        t.push_str(&format!(" {}\n", r));
+    }
+    let (cols, lines) = Crust::terminal_size();
+    let w = cols.saturating_sub(8).clamp(40, 110);
+    // A long move wraps, so count the lines it will take.
+    let inner = (w as usize).saturating_sub(3);
+    let need: usize = rows.iter().map(|r| visible_len(r) / inner + 1).sum();
+    let h = ((need.max(1) + 2) as u16).clamp(5, lines.saturating_sub(4));
+    Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
+}
+
 /// Append one line to the bus log. Fleet logs only phone-bound sends it
 /// observes; deliveries are logged by the receiving hook, so each
 /// message lands in the log exactly once.
@@ -1400,6 +1451,7 @@ fn help() {
     t.push_str(&format!("{}delete everything flagged\n", key("<")));
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
+    t.push_str(&format!("{}your open moves, all sessions\n", key("v")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
     Popup::centered(50, 18, 231, 236).view(&t);
@@ -1417,7 +1469,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · v moves · ? help".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · ? help".to_string(),
         }
     };

@@ -70,6 +70,9 @@ pub struct Session {
     /// prompt. False during a turn and while a permission dialog is up,
     /// where a typed line could land on the wrong thing.
     pub at_prompt: bool,
+    /// What the last answer asks of the user: its "Your move:" lines.
+    /// Empty while Claude has the turn, and for sessions listed as older.
+    pub moves: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -84,6 +87,7 @@ struct TailInfo {
     prompt: String,
     cwd: String,
     ctx_k: Option<u64>,
+    moves: Vec<String>,
 }
 
 pub struct Cache {
@@ -228,6 +232,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 ws: None,
                 ctx_k: info.ctx_k,
                 at_prompt: info.last == 'a' && !info.turn_open,
+                moves: if recent { info.moves.clone() } else { Vec::new() },
             });
         }
     }
@@ -264,6 +269,11 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
     // seen is sdk-cli and not one is cli, decided after the whole tail.
     let mut saw_sdk = false;
     let mut saw_cli = false;
+    // The final answer is the text after the last tool call, gathered
+    // here newest block first. It ends at the first tool call or user
+    // line met on the way up.
+    let mut answer: Vec<String> = Vec::new();
+    let mut answer_done = false;
     for line in lines.iter().rev() {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -282,6 +292,18 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
         }
         if typ == "assistant" {
             let msg = &v["message"];
+            if !answer_done {
+                let blocks = msg["content"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+                if blocks.iter().any(|b| b["type"] == "tool_use") {
+                    answer_done = true;
+                } else {
+                    for b in blocks.iter().rev() {
+                        if b["type"] == "text" {
+                            answer.push(b["text"].as_str().unwrap_or("").to_string());
+                        }
+                    }
+                }
+            }
             if info.last == '\0' {
                 let tools = msg["content"]
                     .as_array()
@@ -335,6 +357,7 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                 }
             }
         } else if typ == "user" {
+            answer_done = true;
             if info.last == '\0' {
                 info.last = 'u';
             }
@@ -351,7 +374,28 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
         }
     }
     info.headless = saw_sdk && !saw_cli;
+    // Only a finished answer leaves moves open. A note written before a
+    // tool call is not one, and a new prompt has answered the old ones.
+    if info.last == 'a' && !info.turn_open {
+        answer.reverse();
+        info.moves = moves_in(&answer.join("\n"));
+    }
     Some(info)
+}
+
+/// The "Your move:" lines of an answer: what the user must do or decide.
+/// A session starts such a line with those words, as a list item or in
+/// bold or bare. A mention further into a line is not one.
+fn moves_in(answer: &str) -> Vec<String> {
+    answer
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim_start_matches(|c: char| c == '-' || c == '*' || c.is_whitespace());
+            let rest = l.strip_prefix("Your move:")?;
+            let rest = rest.trim_start_matches(|c: char| c == '*' || c.is_whitespace()).trim_end();
+            (!rest.is_empty()).then(|| rest.chars().take(240).collect())
+        })
+        .collect()
 }
 
 /// A real user prompt: string content, or a text block in the array.
@@ -579,4 +623,64 @@ pub fn load_tags() -> HashMap<String, String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROMPT: &str = r#"{"type":"user","cwd":"/x","entrypoint":"cli","message":{"content":"do it"}}"#;
+
+    fn text(t: &str, stop: &str) -> String {
+        serde_json::json!({"type": "assistant", "message": {
+            "model": "claude-opus-5-5", "stop_reason": stop,
+            "usage": {"input_tokens": 1000},
+            "content": [{"type": "text", "text": t}]}})
+        .to_string()
+    }
+
+    const TOOL: &str = r#"{"type":"assistant","message":{"model":"claude-opus-5-5","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash"}]}}"#;
+    const RESULT: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#;
+
+    fn moves_of(name: &str, lines: &[&str]) -> Vec<String> {
+        let path = std::env::temp_dir()
+            .join(format!("fleet-test-{}-{}.jsonl", std::process::id(), name));
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let info = read_tail(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        info.moves
+    }
+
+    #[test]
+    fn a_move_line_is_found_in_any_dress() {
+        let a = "Done.\n\n- **Your move:** ship it?\nYour move: pick a name\n  * Your move:  \n";
+        assert_eq!(moves_in(a), vec!["ship it?", "pick a name"]);
+    }
+
+    #[test]
+    fn a_mention_inside_a_line_is_not_a_move() {
+        assert!(moves_in("It lists every \"Your move:\" line.").is_empty());
+    }
+
+    #[test]
+    fn a_finished_answer_leaves_its_moves_open() {
+        let a = text("Built.\n- **Your move:** ship it?", "end_turn");
+        assert_eq!(moves_of("open", &[PROMPT, TOOL, RESULT, &a]), vec!["ship it?"]);
+    }
+
+    #[test]
+    fn a_new_prompt_closes_them() {
+        let a = text("- **Your move:** ship it?", "end_turn");
+        assert!(moves_of("closed", &[PROMPT, &a, PROMPT]).is_empty());
+    }
+
+    #[test]
+    fn a_note_before_a_tool_call_is_not_an_answer() {
+        let note = text("Your move: wait", "tool_use");
+        // Claude still has the turn: the note is the newest line.
+        assert!(moves_of("note", &[PROMPT, &note]).is_empty());
+        // The turn ended, and the answer itself asks for nothing.
+        let a = text("All done.", "end_turn");
+        assert!(moves_of("after", &[PROMPT, &note, TOOL, RESULT, &a]).is_empty());
+    }
 }

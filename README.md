@@ -102,6 +102,11 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   by itself. Only while Claude waits at its prompt, never in the window
   you are typing in, and at most 4 times in 30 minutes
 - `c` today's token rollup per session (Esc back)
+- `v` popup with your open moves, from all sessions. A session that
+  needs something from you starts a line of its answer with
+  `Your move:`. fleet lists those lines from each session's last
+  answer, and the header counts them. Your next prompt to a session
+  clears its rows
 - `o` / `Enter` on an inbox item: open it. A program that runs in a
   terminal (an editor, a PDF reader) gets a glass of its own
 - `o` / `Enter` on a `msg` row: hand the message to the session it is
@@ -123,9 +128,9 @@ bold blue, ages gray, and context size on the statusline's own scale:
 green under 50 % of the window, yellow under 75 %, red above.
 
 `fleet --list` prints sessions and inbox as plain text; `fleet --today`
-prints the rollup. `fleet --wake <tag>` types the check-messages prompt
-into that open session, the same as Enter on an inbox row. All three
-exit immediately.
+prints the rollup; `fleet --moves` prints your open moves. `fleet --wake
+<tag>` types the check-messages prompt into that open session, the same
+as Enter on an inbox row. All four exit immediately.
 
 ## Message bus
 
