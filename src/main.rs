@@ -1454,7 +1454,13 @@ fn help() {
     t.push_str(&format!("{}your open moves, all sessions\n", key("v")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
-    Popup::centered(50, 18, 231, 236).view(&t);
+    // As wide as the longest line and as tall as the list, so no line
+    // wraps and nothing scrolls on a screen that has the room.
+    let (cols, rows) = Crust::terminal_size();
+    let longest = t.lines().map(visible_len).max().unwrap_or(0);
+    let w = ((longest + 4) as u16).min(cols.saturating_sub(4));
+    let h = (t.lines().count() as u16).min(rows.saturating_sub(4));
+    Popup::centered(w, h, 231, 236).view(&t);
 }
 
 fn draw_footer(cols: u16, rows: u16, focus: Focus,
