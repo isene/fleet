@@ -102,13 +102,11 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   by itself. Only while Claude waits at its prompt, never in the window
   you are typing in, and at most 4 times in 30 minutes
 - `c` today's token rollup per session (Esc back)
-- `v` popup with your open moves, from all sessions. A session that
-  needs something from you starts a line of its answer with
-  `Your move:`, and puts what you must decide in a table with a
-  `Question` column. fleet lists those lines and table rows from each
-  session's last answer, and the header counts them. Up and Down move
-  the bar, and Enter jumps to that row's session. Your next prompt to
-  a session clears its rows
+- `v` popup with your open items, from all sessions: what each one
+  still waits for you to do or decide, with its age and its number.
+  The header counts them. Up and Down move the bar, Enter jumps to
+  that row's session, and `d` deletes the item under the bar. See
+  [Open items](#open-items)
 - `o` / `Enter` on an inbox item: open it. A program that runs in a
   terminal (an editor, a PDF reader) gets a glass of its own
 - `o` / `Enter` on a `msg` row: hand the message to the session it is
@@ -130,7 +128,7 @@ bold blue, ages gray, and context size on the statusline's own scale:
 green under 50 % of the window, yellow under 75 %, red above.
 
 `fleet --list` prints sessions and inbox as plain text; `fleet --today`
-prints the rollup; `fleet --moves` prints your open moves. `fleet --wake
+prints the rollup; `fleet --moves` prints your open items. `fleet --wake
 <tag>` types the check-messages prompt into that open session, the same
 as Enter on an inbox row. All four exit immediately.
 
@@ -168,6 +166,36 @@ anything:
   "command": "sh -c 'for f in \"$HOME\"/.fleet/bus/*/* \"$HOME\"/.fleet/relay/*/*; do [ -f \"$f\" ] && exec \"$HOME\"/.claude/hooks/fleet-bus; done; exit 0'" }
 ```
 
+## Open items
+
+A session that works for an hour asks you three things on the way, and
+the next answer pushes each one off the screen. fleet keeps them: every
+question and every action a session leaves with you stays listed under
+`v` until that session closes it, or you delete it with `d`.
+
+A session opens an item in its answer, in one of two ways:
+
+- a row in a table that has a `Question` column, with the item's number
+  in the first column
+- a line that starts with `Your move 7:`
+
+It closes items with a line `Closed: 3, 5`. A number is used once per
+session, so "3 y" means the same question a week later.
+
+The `fleet --hook` Stop hook reads each finished answer and keeps one
+small file per session in `~/.fleet/open/`. When a number is missing or
+taken, it sends the answer back once and names the free numbers. An
+item is never dropped for a fault: it gets the next free number. Add
+the hook to `~/.claude/settings.json` under `hooks.Stop`:
+
+```json
+{ "type": "command", "timeout": 5, "command": "fleet --hook" }
+```
+
+and tell your sessions the two forms above, in `CLAUDE.md` or an output
+style. The hook runs once per answer, in about 2 ms. An answer that
+opens and closes nothing touches no file.
+
 ## Configuration
 
 `~/.fleetrc`, plain text, `#` comments. Any `inbox` line replaces the
@@ -200,9 +228,11 @@ the TUI.
 
 A 2 second tick while open, nothing after `q`. Each tick is one `stat`
 per session file (transcript tails are re-read only when mtime
-changed) and one `readdir` per inbox folder. The token rollup reads
-whole transcripts, so it runs only on demand (`c` or `--today`), never
-on the tick.
+changed), one `readdir` per inbox folder, and one `stat` of the
+open-items folder, whose files are read again only after it changed.
+
+The token rollup reads whole transcripts, so it runs only on demand
+(`c` or `--today`), never on the tick.
 
 Two costs were measured and cut, from 170 wakeups a second to 21:
 

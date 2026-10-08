@@ -13,6 +13,7 @@
 
 mod config;
 mod inbox;
+mod open;
 mod rollup;
 mod sessions;
 mod winmap;
@@ -131,15 +132,30 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 fn main() {
+    // The Stop hook of every Claude session: first, and done before
+    // anything is loaded, since it runs at the end of each answer.
+    if std::env::args().nth(1).as_deref() == Some("--hook") {
+        let mut input = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Some(out) = open::hook(&input, now) {
+            println!("{}", out);
+        }
+        return;
+    }
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("fleet — Claude Code mission control (Fe2O3 suite)");
         println!();
-        println!("Usage: fleet [--list | --today | --moves | --wake TAG]");
+        println!("Usage: fleet [--list | --today | --moves | --wake TAG | --hook]");
         println!();
         println!("  --list     print sessions and inbox as text and exit");
         println!("  --today    print today's token rollup per session and exit");
-        println!("  --moves    print what each session waits for you to decide and exit");
+        println!("  --moves    print what each session waits for you to do or decide and exit");
         println!("  --wake TAG type the check-messages prompt into that open session and exit");
+        println!("  --hook     Claude Code Stop hook: keep the session's list of open items");
         println!();
         println!("Sessions with state (working / YOURS / CAPPED / idle / off), workspace and");
         println!("context size, plus the inbox folders where handoffs land.");
@@ -170,7 +186,7 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "--moves") {
         let rows = move_rows(&sessions::scan(&cfg, &mut cache));
         if rows.is_empty() {
-            println!("no open moves");
+            println!("no open items");
         }
         for r in rows {
             println!("{}", r);
@@ -604,6 +620,9 @@ fn main() {
                         if std::fs::remove_file(p).is_ok() {
                             ns += 1;
                         }
+                        if let Some(id) = p.file_stem() {
+                            open::forget(&id.to_string_lossy());
+                        }
                         let side = p.with_extension(""); // subagent sidecar dir
                         if side.is_dir() {
                             let _ = std::fs::remove_dir_all(&side);
@@ -782,7 +801,8 @@ fn main() {
             Some("?") | Some("h") => help(),
             Some("M") => show_log(),
             Some("v") => {
-                if let Some(s) = show_moves(&sess).and_then(|i| sess.get(i).map(|s| (i, s))) {
+                let pick = show_moves(&mut sess);
+                if let Some(s) = pick.and_then(|i| sess.get(i).map(|s| (i, s))) {
                     sel_s = s.0;
                     focus = Focus::Sessions;
                     flash = enter_session(wm.as_ref(), s.1, cfg.session_prefs.get(&s.1.tag));
@@ -870,7 +890,7 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) 
     line.push_str(&style::styled(&format!("{} YOURS", yours), Some(208), None, "b"));
     let moves: usize = sess.iter().map(|s| s.moves.len()).sum();
     if moves > 0 {
-        line.push_str(&format!("  ·  {} {}", moves, if moves == 1 { "move" } else { "moves" }));
+        line.push_str(&format!("  ·  {} open", moves));
     }
     line.push_str(&format!("  ·  {} working  ·  {} sessions", working, sess.len()));
     line.push_str(&format!("  ·  inbox {}", items.len()));
@@ -1343,59 +1363,124 @@ fn show_log() {
     Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
 }
 
-/// One row per "Your move:" line a session's last answer left open.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// One row per open item, as plain text.
 fn move_rows(sess: &[Session]) -> Vec<String> {
     let w = sess.iter()
         .filter(|s| !s.moves.is_empty())
         .map(|s| s.tag.chars().count())
         .max()
         .unwrap_or(0);
+    let now = now_secs();
     sess.iter()
         .flat_map(|s| s.moves.iter().map(move |m| {
-            format!("{:<w$} {:>6}  {}", s.tag, fmt_age(s.age_secs), m, w = w)
+            format!("{:<w$} {:>6} {:>3}  {}", s.tag, fmt_age(now.saturating_sub(m.at)), m.num, m.text, w = w)
         }))
         .collect()
 }
 
-/// What every session waits for the user to do or decide, in a popup.
-/// The rows come from the tails the scan already read: no file is opened.
-/// Up/Down move the bar, and Enter returns the session under it, by its
-/// place in `sess`.
-fn show_moves(sess: &[Session]) -> Option<usize> {
-    let (cols, lines) = Crust::terminal_size();
-    let w = cols.saturating_sub(8).clamp(40, 110);
+/// The rows of the open-items popup, and for each row the session (by
+/// its place in `sess`) and the number of the item it belongs to.
+fn move_lines(sess: &[Session], w: usize) -> (Vec<String>, Vec<(usize, u32)>) {
     let tag_w = sess.iter()
         .filter(|s| !s.moves.is_empty())
         .map(|s| s.tag.chars().count())
         .max()
         .unwrap_or(0);
-    // The tag, the age and the gaps between them: where the text starts.
-    let indent = tag_w + 9;
-    let room = (w as usize).saturating_sub(4 + indent);
-    let mut rows: Vec<String> = Vec::new();
-    let mut owner: Vec<usize> = Vec::new(); // the session each row belongs to
+    // The tag, the age, the number and the gaps: where the text starts.
+    let indent = tag_w + 13;
+    let room = w.saturating_sub(4 + indent);
+    let now = now_secs();
+    let mut rows = Vec::new();
+    let mut owner = Vec::new();
     for (i, s) in sess.iter().enumerate() {
         // The tag wears the colour it has in the session list.
         let tag = style::styled(&format!("{:<tag_w$}", s.tag),
                                 Some(if s.tagged { 13 } else { 250 }), None, "");
         for m in &s.moves {
-            for (n, line) in hang(m, indent, room).iter().enumerate() {
+            for (n, line) in hang(&m.text, indent, room).iter().enumerate() {
                 rows.push(if n == 0 {
-                    format!(" {} {:>6}  {}", tag, fmt_age(s.age_secs), line)
+                    format!(" {} {:>6} {:>3}  {}", tag, fmt_age(now.saturating_sub(m.at)), m.num, line)
                 } else {
                     format!(" {}", line)
                 });
-                owner.push(i);
+                owner.push((i, m.num));
             }
         }
     }
+    (rows, owner)
+}
+
+/// What every session waits for the user to do or decide, in a popup:
+/// its open items, each with the number the user answers by. Up/Down
+/// move the bar, Enter returns the session under it by its place in
+/// `sess`, and d deletes the item under it, for one its session never
+/// closed. The rows come from what the scan holds: no file is read.
+fn show_moves(sess: &mut [Session]) -> Option<usize> {
+    let (cols, lines) = Crust::terminal_size();
+    let w = cols.saturating_sub(8).clamp(40, 110);
+    let (mut rows, mut owner) = move_lines(sess, w as usize);
     if rows.is_empty() {
-        Popup::centered(w, 5, 231, 236).view(" no open moves");
+        Popup::centered(w, 5, 231, 236).view(" no open items");
         return None;
     }
     let h = ((rows.len() + 2) as u16).clamp(5, lines.saturating_sub(4));
-    let row = Popup::centered(w, h, 231, 236).modal(&rows.join("\n"))?;
-    owner.get(row).copied()
+    let mut pop = Popup::centered(w, h, 231, 236);
+    pop.pane.wrap = false;
+    pop.pane.border_refresh();
+    let mut at = 0usize; // the row under the bar
+    loop {
+        // Scroll only as far as it takes to keep the bar on screen.
+        let page = (pop.pane.h as usize).max(1);
+        if at < pop.pane.ix {
+            pop.pane.ix = at;
+        } else if at >= pop.pane.ix + page {
+            pop.pane.ix = at + 1 - page;
+        }
+        let shown: Vec<String> = rows.iter().enumerate()
+            .map(|(i, r)| if i == at { bar_row(r, w as usize, 231, 236) } else { r.clone() })
+            .collect();
+        pop.pane.set_text(&shown.join("\n"));
+        pop.pane.refresh();
+        let last = rows.len() - 1;
+        match Input::getchr(None).as_deref() {
+            Some("ESC") | Some("q") => return None,
+            Some("ENTER") => return Some(owner[at].0),
+            Some("UP") | Some("k") => at = at.saturating_sub(1),
+            Some("DOWN") | Some("j") => at = (at + 1).min(last),
+            Some("PgUP") => at = at.saturating_sub(page),
+            Some("PgDOWN") | Some(" ") => at = (at + page).min(last),
+            Some("HOME") | Some("g") => at = 0,
+            Some("END") | Some("G") => at = last,
+            Some("d") => {
+                let (i, num) = owner[at];
+                open::delete(&sess[i].id, num);
+                sess[i].moves.retain(|m| m.num != num);
+                (rows, owner) = move_lines(sess, w as usize);
+                if rows.is_empty() {
+                    return None;
+                }
+                // Land on the first row of what moved up into its place.
+                at = owner.iter().position(|o| *o >= (i, num)).unwrap_or(rows.len() - 1);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// One popup row as the selection bar: the popup's colours swapped and
+/// armed again after every reset inside the row, so a coloured tag keeps
+/// its colour and the bar stays one tone to the right edge.
+fn bar_row(line: &str, width: usize, fg: u8, bg: u8) -> String {
+    let bar = format!("{}{}", style::set_bg(fg), style::set_fg(bg));
+    let body = clip(line, width).replace(style::RESET, &format!("{}{}", style::RESET, bar));
+    format!("{bar}{body}{}", style::RESET)
 }
 
 /// Text broken at spaces into lines of at most `width` cells. Every line
@@ -1505,7 +1590,7 @@ fn help() {
     t.push_str(&format!("{}delete everything flagged\n", key("<")));
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
-    t.push_str(&format!("{}your open moves; Enter jumps to one\n", key("v")));
+    t.push_str(&format!("{}open items; Enter jumps to one, d deletes it\n", key("v")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
     // As wide as the longest line and as tall as the list, so no line
@@ -1529,7 +1614,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · v moves · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · v open · ? help".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · ? help".to_string(),
         }
     };
@@ -1624,6 +1709,43 @@ mod width_tests {
     fn a_wrapped_move_stays_in_its_column() {
         let lines = hang("answer the rows above by number today", 4, 12);
         assert_eq!(lines, vec!["answer the", "    rows above", "    by number", "    today"]);
+    }
+
+    fn session(tag: &str, items: &[(u32, &str)]) -> Session {
+        Session {
+            id: tag.into(), tag: tag.into(), cwd: String::new(), path: Default::default(),
+            state: State::Yours, tagged: true, age_secs: 0, model: String::new(),
+            prompt: String::new(), pid: None, ws: None, ctx_k: None, at_prompt: true,
+            moves: items.iter()
+                .map(|(n, t)| open::Open { num: *n, at: now_secs(), text: t.to_string() })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn every_row_of_the_open_list_knows_its_item() {
+        let long = "word ".repeat(30);
+        let sess = vec![session("quiet", &[]), session("pf", &[(3, "short"), (12, &long)])];
+        let (rows, owner) = move_lines(&sess, 60);
+        assert_eq!(rows.len(), owner.len());
+        assert_eq!(owner[0], (1, 3));
+        assert!(owner.len() > 2 && owner[1..].iter().all(|o| *o == (1, 12)),
+                "each wrapped line still belongs to item 12");
+        // A wrapped line starts in the column the text started in.
+        let col = |r: &str| visible_len(&r[..r.find("word").unwrap()]);
+        assert_eq!(col(&rows[1]), col(&rows[2]));
+        assert!(rows.iter().all(|r| visible_len(r) <= 60 - 2));
+    }
+
+    #[test]
+    fn the_bar_runs_to_the_edge_and_keeps_the_tag_colour() {
+        let sess = vec![session("pf", &[(3, "short")])];
+        let row = &move_lines(&sess, 60).0[0];
+        let bar = bar_row(row, 60, 231, 236);
+        assert_eq!(visible_len(&bar), 60);
+        // The tag's own reset would end the bar: it is armed again there.
+        let arm = format!("{}{}", style::set_bg(231), style::set_fg(236));
+        assert!(bar.contains(&format!("{}{}", style::RESET, arm)));
     }
 
     #[test]
