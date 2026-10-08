@@ -503,25 +503,7 @@ fn main() {
             Some("ENTER") | Some("o") => match focus {
                 Focus::Sessions => {
                     if let Some(s) = sess.get(sel_s) {
-                        // Same workspace: injecting tile's hotkey would
-                        // TOGGLE to the previous workspace, so don't.
-                        let cur = wm.as_ref().and_then(|w| w.current_desktop());
-                        // Raise this session's own tab first: it may be
-                        // one of several full-screen glasses stacked on
-                        // the workspace, so switching there is not enough.
-                        if let (Some(wmc), Some(pid)) = (wm.as_ref(), s.pid) {
-                            let pw = wmc.pid_windows();
-                            if let Some(xid) = sessions::window_ancestor(pid, &pw) {
-                                wmc.activate(xid);
-                            }
-                        }
-                        flash = match s.ws {
-                            Some(w) if Some(w) == cur => {
-                                format!("→ {} raised", s.tag)
-                            }
-                            Some(w) => jump(wm.as_ref(), &s.tag, w),
-                            None => resurrect(wm.as_ref(), s, cfg.session_prefs.get(&s.tag)),
-                        };
+                        flash = enter_session(wm.as_ref(), s, cfg.session_prefs.get(&s.tag));
                     }
                 }
                 Focus::Inbox => {
@@ -799,7 +781,13 @@ fn main() {
             }
             Some("?") | Some("h") => help(),
             Some("M") => show_log(),
-            Some("v") => show_moves(&sess),
+            Some("v") => {
+                if let Some(s) = show_moves(&sess).and_then(|i| sess.get(i).map(|s| (i, s))) {
+                    sel_s = s.0;
+                    focus = Focus::Sessions;
+                    flash = enter_session(wm.as_ref(), s.1, cfg.session_prefs.get(&s.1.tag));
+                }
+            }
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
                 cols = c;
@@ -1123,6 +1111,28 @@ fn draw_inbox(cols: u16, y: u16, h: u16, items: &[inbox::Item],
     paint(&mut pane, out.trim_end_matches('\n'));
 }
 
+/// Go to a session: raise its window and switch to its workspace, or
+/// resume it in a new glass when it has no window.
+fn enter_session(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref>) -> String {
+    // Same workspace: injecting tile's hotkey would TOGGLE to the
+    // previous workspace, so don't.
+    let cur = wm.and_then(|w| w.current_desktop());
+    // Raise this session's own tab first: it may be one of several
+    // full-screen glasses stacked on the workspace, so switching there
+    // is not enough.
+    if let (Some(wmc), Some(pid)) = (wm, s.pid) {
+        let pw = wmc.pid_windows();
+        if let Some(xid) = sessions::window_ancestor(pid, &pw) {
+            wmc.activate(xid);
+        }
+    }
+    match s.ws {
+        Some(w) if Some(w) == cur => format!("→ {} raised", s.tag),
+        Some(w) => jump(wm, &s.tag, w),
+        None => resurrect(wm, s, pref),
+    }
+}
+
 /// Switch to the session's workspace. Without an X connection, name the
 /// workspace instead.
 fn jump(wm: Option<&WinMap>, tag: &str, ws: u32) -> String {
@@ -1349,30 +1359,43 @@ fn move_rows(sess: &[Session]) -> Vec<String> {
 
 /// What every session waits for the user to do or decide, in a popup.
 /// The rows come from the tails the scan already read: no file is opened.
-fn show_moves(sess: &[Session]) {
+/// Up/Down move the bar, and Enter returns the session under it, by its
+/// place in `sess`.
+fn show_moves(sess: &[Session]) -> Option<usize> {
     let (cols, lines) = Crust::terminal_size();
     let w = cols.saturating_sub(8).clamp(40, 110);
-    let open: Vec<&Session> = sess.iter().filter(|s| !s.moves.is_empty()).collect();
-    let tag_w = open.iter().map(|s| s.tag.chars().count()).max().unwrap_or(0);
+    let tag_w = sess.iter()
+        .filter(|s| !s.moves.is_empty())
+        .map(|s| s.tag.chars().count())
+        .max()
+        .unwrap_or(0);
     // The tag, the age and the gaps between them: where the text starts.
     let indent = tag_w + 9;
     let room = (w as usize).saturating_sub(4 + indent);
-    let mut t = String::new();
-    let mut need = 0;
-    for s in open {
+    let mut rows: Vec<String> = Vec::new();
+    let mut owner: Vec<usize> = Vec::new(); // the session each row belongs to
+    for (i, s) in sess.iter().enumerate() {
         // The tag wears the colour it has in the session list.
-        let tag = style::fg(&format!("{:<tag_w$}", s.tag), if s.tagged { 13 } else { 250 });
+        let tag = style::styled(&format!("{:<tag_w$}", s.tag),
+                                Some(if s.tagged { 13 } else { 250 }), None, "");
         for m in &s.moves {
-            let text = hang(m, indent, room);
-            need += text.len();
-            t.push_str(&format!(" {} {:>6}  {}\n", tag, fmt_age(s.age_secs), text.join("\n ")));
+            for (n, line) in hang(m, indent, room).iter().enumerate() {
+                rows.push(if n == 0 {
+                    format!(" {} {:>6}  {}", tag, fmt_age(s.age_secs), line)
+                } else {
+                    format!(" {}", line)
+                });
+                owner.push(i);
+            }
         }
     }
-    if need == 0 {
-        t.push_str(" no open moves");
+    if rows.is_empty() {
+        Popup::centered(w, 5, 231, 236).view(" no open moves");
+        return None;
     }
-    let h = ((need.max(1) + 2) as u16).clamp(5, lines.saturating_sub(4));
-    Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
+    let h = ((rows.len() + 2) as u16).clamp(5, lines.saturating_sub(4));
+    let row = Popup::centered(w, h, 231, 236).modal(&rows.join("\n"))?;
+    owner.get(row).copied()
 }
 
 /// Text broken at spaces into lines of at most `width` cells. Every line
@@ -1482,7 +1505,7 @@ fn help() {
     t.push_str(&format!("{}delete everything flagged\n", key("<")));
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
-    t.push_str(&format!("{}your open moves, all sessions\n", key("v")));
+    t.push_str(&format!("{}your open moves; Enter jumps to one\n", key("v")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
     // As wide as the longest line and as tall as the list, so no line
