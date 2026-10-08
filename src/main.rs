@@ -291,6 +291,8 @@ fn main() {
     let mut auto_times: std::collections::HashMap<String, Vec<std::time::Instant>> = std::collections::HashMap::new();
     // Set once a newer build has replaced the file this fleet runs from.
     let mut old = false;
+    // The popup that is open, if one is. The tick goes on under it.
+    let mut over: Option<Over> = None;
 
     loop {
         old = old || rebuilt();
@@ -430,26 +432,36 @@ fn main() {
         let inbox_h = (items.len() + logs.len() + 2).clamp(3, (body / 3).max(3));
         let sess_h = body.saturating_sub(inbox_h);
 
-        refresh_rates(&mut rates);
-        draw_header(cols, &sess, &items, &rates.1);
-        if let Some(rows_r) = &rollup_rows {
-            draw_rollup(cols, 2, body as u16, rows_r);
-        } else {
-            draw_sessions(cols, 2, sess_h as u16, &sess,
-                          focus == Focus::Sessions, sel_s, &marked_s,
-                          cfg.ctx_window_k, &cfg.autowake);
-            // The addresses the bus can actually deliver to: the tags of
-            // bookmarked sessions. A message signed with anything else
-            // carries a return address that leads nowhere.
-            let addrs: Vec<&str> = sess.iter()
-                .filter(|s| s.tagged)
-                .map(|s| s.tag.as_str())
-                .collect();
-            draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
-                       focus == Focus::Inbox, sel_i, &marked, &logs, &addrs);
+        // An open popup owns the screen: the panes under it are not
+        // painted, and the open list paints itself only when it changed.
+        if let Some(Over::Moves(m)) = &mut over {
+            if !m.draw(&sess) {
+                over = None;
+                unpaint();
+            }
         }
-        draw_footer(cols, rows, focus, &flash,
-                    rollup_rows.is_some(), &msg_to, &msg_buf, old);
+        if over.is_none() {
+            refresh_rates(&mut rates);
+            draw_header(cols, &sess, &items, &rates.1);
+            if let Some(rows_r) = &rollup_rows {
+                draw_rollup(cols, 2, body as u16, rows_r);
+            } else {
+                draw_sessions(cols, 2, sess_h as u16, &sess,
+                              focus == Focus::Sessions, sel_s, &marked_s,
+                              cfg.ctx_window_k, &cfg.autowake);
+                // The addresses the bus can actually deliver to: the tags of
+                // bookmarked sessions. A message signed with anything else
+                // carries a return address that leads nowhere.
+                let addrs: Vec<&str> = sess.iter()
+                    .filter(|s| s.tagged)
+                    .map(|s| s.tag.as_str())
+                    .collect();
+                draw_inbox(cols, 2 + sess_h as u16, inbox_h as u16, &items,
+                           focus == Focus::Inbox, sel_i, &marked, &logs, &addrs);
+            }
+            draw_footer(cols, rows, focus, &flash,
+                        rollup_rows.is_some(), &msg_to, &msg_buf, old);
+        }
 
         let key = Input::getchr(Some(2));
         if key.is_some() {
@@ -457,6 +469,32 @@ fn main() {
         }
         let k = key.as_deref();
         flash.clear();
+
+        // An open popup takes every key. A resize closes it: its place
+        // and size were worked out for the old screen.
+        if let Some(o) = &mut over {
+            let step = match k {
+                None => Step::Stay,
+                Some("RESIZE") => Step::Close,
+                Some(k) => o.key(k, &sess),
+            };
+            match step {
+                Step::Stay => {}
+                Step::Close => over = None,
+                Step::Jump(i) => {
+                    over = None;
+                    if let Some(s) = sess.get(i) {
+                        sel_s = i;
+                        sel_path = Some(s.path.clone());
+                        focus = Focus::Sessions;
+                        flash = enter_session(wm.as_ref(), s, cfg.session_prefs.get(&s.tag));
+                    }
+                }
+            }
+            if k != Some("RESIZE") {
+                continue;
+            }
+        }
 
         // Message-input mode captures every keystroke until Enter or Esc.
         if let Some((addr, tag)) = msg_to.clone() {
@@ -801,16 +839,9 @@ fn main() {
             Some("c") => {
                 rollup_rows = Some(rollup::today(&sessions::load_tags()));
             }
-            Some("?") | Some("h") => help(),
-            Some("M") => show_log(),
-            Some("v") => {
-                let pick = show_moves(&mut sess);
-                if let Some(s) = pick.and_then(|i| sess.get(i).map(|s| (i, s))) {
-                    sel_s = s.0;
-                    focus = Focus::Sessions;
-                    flash = enter_session(wm.as_ref(), s.1, cfg.session_prefs.get(&s.1.tag));
-                }
-            }
+            Some("?") | Some("h") => over = Some(help()),
+            Some("M") => over = Some(show_log()),
+            Some("v") => over = Some(Moves::open(&sess)),
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
                 cols = c;
@@ -1346,7 +1377,7 @@ fn session_title(s: &Session, pref: Option<&config::SessionPref>) -> Option<Stri
 }
 
 /// The full bus traffic log in a scrollable popup, newest first.
-fn show_log() {
+fn show_log() -> Over {
     let logs = inbox::log_tail(500);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1363,7 +1394,7 @@ fn show_log() {
     let (cols, rows) = Crust::terminal_size();
     let w = cols.saturating_sub(8).clamp(40, 110);
     let h = ((logs.len().max(1) + 2) as u16).clamp(5, rows.saturating_sub(4));
-    Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
+    Over::text(w, h, t.trim_end_matches('\n'))
 }
 
 fn now_secs() -> u64 {
@@ -1420,60 +1451,152 @@ fn move_lines(sess: &[Session], w: usize) -> (Vec<String>, Vec<(usize, u32)>) {
     (rows, owner)
 }
 
-/// What every session waits for the user to do or decide, in a popup:
-/// its open items, each with the number the user answers by. Up/Down
-/// move the bar, Enter returns the session under it by its place in
-/// `sess`, and d deletes the item under it, for one its session never
-/// closed. The rows come from what the scan holds: no file is read.
-fn show_moves(sess: &mut [Session]) -> Option<usize> {
-    let (cols, lines) = Crust::terminal_size();
-    let w = cols.saturating_sub(8).clamp(40, 110);
-    let (mut rows, mut owner) = move_lines(sess, w as usize);
-    if rows.is_empty() {
-        Popup::centered(w, 5, 231, 236).view(" no open items");
-        return None;
+/// A popup that stays open over the tick. The main loop goes on
+/// scanning and waking sessions under it. Until v0.3.47 a popup waited
+/// for a key with no time limit, and fleet did nothing until it closed.
+enum Over {
+    /// Text to read: the help, the bus log.
+    Text(Popup),
+    /// The open items.
+    Moves(Moves),
+}
+
+/// What a key did to an open popup.
+enum Step {
+    Stay,
+    Close,
+    /// Close, and go to the session at this place in the list.
+    Jump(usize),
+}
+
+impl Over {
+    fn text(w: u16, h: u16, t: &str) -> Over {
+        let mut pop = Popup::centered(w, h, 231, 236);
+        pop.show(t);
+        Over::Text(pop)
     }
-    let h = ((rows.len() + 2) as u16).clamp(5, lines.saturating_sub(4));
-    let mut pop = Popup::centered(w, h, 231, 236);
-    pop.pane.wrap = false;
-    pop.pane.border_refresh();
-    let mut at = 0usize; // the row under the bar
-    loop {
-        // Scroll only as far as it takes to keep the bar on screen.
-        let page = (pop.pane.h as usize).max(1);
-        if at < pop.pane.ix {
-            pop.pane.ix = at;
-        } else if at >= pop.pane.ix + page {
-            pop.pane.ix = at + 1 - page;
-        }
-        let shown: Vec<String> = rows.iter().enumerate()
-            .map(|(i, r)| if i == at { bar_row(r, w as usize, 231, 236) } else { r.clone() })
-            .collect();
-        pop.pane.set_text(&shown.join("\n"));
-        pop.pane.refresh();
-        let last = rows.len() - 1;
-        match Input::getchr(None).as_deref() {
-            Some("ESC") | Some("q") => return None,
-            Some("ENTER") => return Some(owner[at].0),
-            Some("UP") | Some("k") => at = at.saturating_sub(1),
-            Some("DOWN") | Some("j") => at = (at + 1).min(last),
-            Some("PgUP") => at = at.saturating_sub(page),
-            Some("PgDOWN") | Some(" ") => at = (at + page).min(last),
-            Some("HOME") | Some("g") => at = 0,
-            Some("END") | Some("G") => at = last,
-            Some("d") => {
-                let (i, num) = owner[at];
-                open::delete(&sess[i].id, num);
-                sess[i].moves.retain(|m| m.num != num);
-                (rows, owner) = move_lines(sess, w as usize);
-                if rows.is_empty() {
-                    return None;
-                }
-                // Land on the first row of what moved up into its place.
-                at = owner.iter().position(|o| *o >= (i, num)).unwrap_or(rows.len() - 1);
-            }
+
+    fn key(&mut self, k: &str, sess: &[Session]) -> Step {
+        let pop = match self {
+            Over::Moves(m) => return m.key(k, sess),
+            Over::Text(pop) => pop,
+        };
+        match k {
+            "ESC" | "q" | "ENTER" => return Step::Close,
+            "UP" | "k" => { pop.pane.lineup(); }
+            "DOWN" | "j" => { pop.pane.linedown(); }
+            "PgDOWN" | " " => { pop.pane.pagedown(); }
+            "PgUP" | "b" => { pop.pane.pageup(); }
+            "HOME" | "g" => { pop.pane.top(); }
+            "END" | "G" => { pop.pane.bottom(); }
             _ => {}
         }
+        Step::Stay
+    }
+}
+
+/// What every session waits for the user to do or decide, in a popup:
+/// its open items, each with the number the user answers by. Up/Down
+/// move the bar, Enter goes to the session under it, and d deletes the
+/// item under it, for one its session never closed.
+struct Moves {
+    pop: Popup,
+    w: usize,
+    /// The row under the bar.
+    at: usize,
+    /// The item that row belongs to, by session id and number. The list
+    /// is built again every tick, and the bar has to stay on its item.
+    on: Option<(String, u32)>,
+    /// For each row, its session (by its place in the list) and number.
+    owner: Vec<(usize, u32)>,
+    shown: String,
+}
+
+/// Where the bar goes when the list was built again: it stays on its
+/// item, and when that item is gone it keeps its row.
+fn follow(at: usize, on: Option<&(String, u32)>, keys: &[(String, u32)]) -> usize {
+    let at = at.min(keys.len().saturating_sub(1));
+    match on {
+        Some(o) if keys.get(at) != Some(o) => keys.iter().position(|k| k == o).unwrap_or(at),
+        _ => at,
+    }
+}
+
+impl Moves {
+    fn open(sess: &[Session]) -> Over {
+        let (cols, lines) = Crust::terminal_size();
+        let w = cols.saturating_sub(8).clamp(40, 110);
+        let n = move_lines(sess, w as usize).0.len();
+        if n == 0 {
+            return Over::text(w, 5, " no open items");
+        }
+        let h = ((n + 2) as u16).clamp(5, lines.saturating_sub(4));
+        let mut pop = Popup::centered(w, h, 231, 236);
+        pop.pane.wrap = false;
+        pop.pane.border_refresh();
+        Over::Moves(Moves {
+            pop, w: w as usize, at: 0, on: None, owner: Vec::new(), shown: String::new(),
+        })
+    }
+
+    /// Draw the list from what the scan holds now: no file is read, and
+    /// nothing is painted while the rows stay the same. False when no
+    /// item is left.
+    fn draw(&mut self, sess: &[Session]) -> bool {
+        let (rows, owner) = move_lines(sess, self.w);
+        if rows.is_empty() {
+            return false;
+        }
+        let keys: Vec<(String, u32)> = owner.iter()
+            .map(|(i, n)| (sess[*i].id.clone(), *n))
+            .collect();
+        self.at = follow(self.at, self.on.as_ref(), &keys);
+        self.on = Some(keys[self.at].clone());
+        self.owner = owner;
+        // Scroll only as far as it takes to keep the bar on screen.
+        let page = (self.pop.pane.h as usize).max(1);
+        if self.at < self.pop.pane.ix {
+            self.pop.pane.ix = self.at;
+        } else if self.at >= self.pop.pane.ix + page {
+            self.pop.pane.ix = self.at + 1 - page;
+        }
+        let text = rows.iter().enumerate()
+            .map(|(i, r)| if i == self.at { bar_row(r, self.w, 231, 236) } else { r.clone() })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text != self.shown {
+            self.pop.pane.set_text(&text);
+            self.pop.pane.refresh();
+            self.shown = text;
+        }
+        true
+    }
+
+    fn key(&mut self, k: &str, sess: &[Session]) -> Step {
+        let last = self.owner.len().saturating_sub(1);
+        let page = (self.pop.pane.h as usize).max(1);
+        let at = self.at;
+        match k {
+            "ESC" | "q" => return Step::Close,
+            "ENTER" => return self.owner.get(at).map_or(Step::Close, |o| Step::Jump(o.0)),
+            "UP" | "k" => self.at = at.saturating_sub(1),
+            "DOWN" | "j" => self.at = (at + 1).min(last),
+            "PgUP" => self.at = at.saturating_sub(page),
+            "PgDOWN" | " " => self.at = (at + page).min(last),
+            "HOME" | "g" => self.at = 0,
+            "END" | "G" => self.at = last,
+            "d" => {
+                if let Some(&(i, num)) = self.owner.get(at) {
+                    open::delete(&sess[i].id, num);
+                    // Land on the first row of what moves up into its place.
+                    self.at = self.owner.iter().position(|o| *o == (i, num)).unwrap_or(at);
+                }
+            }
+            _ => return Step::Stay,
+        }
+        // The bar was moved by hand: it belongs to the row it is on now.
+        self.on = None;
+        Step::Stay
     }
 }
 
@@ -1567,8 +1690,8 @@ fn draw_rollup(cols: u16, y: u16, h: u16, rows: &[rollup::Row]) {
     paint(&mut pane, &out);
 }
 
-/// Bordered, blocking help viewer (crust Popup): ESC / q / ENTER closes.
-fn help() {
+/// The help in a popup: ESC / q / ENTER closes.
+fn help() -> Over {
     let hdr = |s: &str| style::styled(s, Some(208), None, "b");
     let key = |s: &str| style::styled(&format!("  {:<10}", s), Some(46), None, "");
     let mut t = String::new();
@@ -1602,7 +1725,7 @@ fn help() {
     let longest = t.lines().map(visible_len).max().unwrap_or(0);
     let w = ((longest + 4) as u16).min(cols.saturating_sub(4));
     let h = (t.lines().count() as u16).min(rows.saturating_sub(4));
-    Popup::centered(w, h, 231, 236).view(&t);
+    Over::text(w, h, &t)
 }
 
 /// True once the file this fleet was started from is gone, which is
@@ -1715,6 +1838,33 @@ mod open_tests {
 #[cfg(test)]
 mod width_tests {
     use super::*;
+
+    #[test]
+    fn no_key_read_waits_without_a_time_limit() {
+        // A popup that waits for a key with no limit stops the tick: the
+        // list goes stale and no session is woken until it closes
+        // (v0.3.46). crust's own viewer and menu wait that way too.
+        let src = include_str!("main.rs");
+        for bad in [["getchr(", "None)"].concat(), [".vi", "ew("].concat(), [".mod", "al("].concat()] {
+            assert!(!src.contains(&bad), "{} waits without a time limit", bad);
+        }
+    }
+
+    #[test]
+    fn the_bar_stays_on_its_item_when_the_list_changes() {
+        let k = |s: &str, n: u32| (s.to_string(), n);
+        // Item a2 takes two rows.
+        let keys = vec![k("a", 1), k("a", 2), k("a", 2), k("b", 7)];
+        // Nothing changed: the bar keeps its row, also the second of an item.
+        assert_eq!(follow(2, Some(&k("a", 2)), &keys), 2);
+        // A row above went away: the bar follows its item up.
+        assert_eq!(follow(3, Some(&k("b", 7)), &keys[1..]), 2);
+        // Its item went away: it keeps the row, or the last one left.
+        assert_eq!(follow(1, Some(&k("x", 9)), &keys), 1);
+        assert_eq!(follow(9, Some(&k("x", 9)), &keys), 3);
+        // Moved by hand: there is no item to follow.
+        assert_eq!(follow(3, None, &keys), 3);
+    }
 
     #[test]
     fn an_old_fleet_says_so_in_the_footer() {

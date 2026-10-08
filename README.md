@@ -173,6 +173,10 @@ the next answer pushes each one off the screen. fleet keeps them: every
 question and every action a session leaves with you stays listed under
 `v` until that session closes it, or you delete it with `d`.
 
+The list is live while it is open: a new item shows up within 2
+seconds, and fleet goes on waking sessions under it. The same is true
+for the help and the message log.
+
 A session opens an item in its answer, in one of two ways:
 
 - a row in a table that has a `Question` column, with the item's number
