@@ -158,8 +158,8 @@ When idle the hook is one stat of a usually absent directory.
 The same hook can also run under `hooks.Stop`. A session that is already
 working then gets its messages when its turn ends, with no prompt from
 you. It delivers once per turn, so two sessions cannot keep answering
-each other. The shell test in front skips Python when no mailbox holds
-anything:
+each other. The shell test in front skips Python when every mailbox is
+empty:
 
 ```json
 { "type": "command", "timeout": 10,
@@ -183,22 +183,31 @@ A session opens an item in its answer, in one of two ways:
   in the first column
 - a line that starts with `Your move 7:`
 
-It closes items with a line `Closed: 3, 5`. A number is used once per
-session, so "3 y" means the same question a week later.
+It closes items with a line `Closed: 3, 5`. The number of a closed item
+is free again from the next answer on, so the numbers stay small: a new
+item takes the lowest one that is not open.
 
-The `fleet --hook` Stop hook reads each finished answer and keeps one
-small file per session in `~/.fleet/open/`. When a number is missing or
-taken, it sends the answer back once and names the free numbers. An
-item is never dropped for a fault: it gets the next free number. Add
-the hook to `~/.claude/settings.json` under `hooks.Stop`:
+You answer an item by starting a line of your prompt with its number,
+as in `3 y` or `3: the second one`. fleet hides that item at once, while
+the session works. It shows again when the turn ends, unless the answer
+closed it.
+
+The `fleet --hook` hook does both. It reads each prompt and each
+finished answer, and keeps one small file per session in
+`~/.fleet/open/`. When a number is missing or taken, it sends the answer
+back once and names the first free number. An item is never dropped for
+a fault: it gets the lowest free number.
+
+Add the hook to `~/.claude/settings.json` under `hooks.Stop` and under
+`hooks.UserPromptSubmit`:
 
 ```json
 { "type": "command", "timeout": 5, "command": "fleet --hook" }
 ```
 
 and tell your sessions the two forms above, in `CLAUDE.md` or an output
-style. The hook runs once per answer, in about 2 ms. An answer that
-opens and closes nothing touches no file.
+style. The hook runs once per prompt and once per answer, in about 2 ms
+each. A prompt or an answer that changes nothing touches no file.
 
 ## Configuration
 

@@ -1,6 +1,6 @@
 //! Open items: what each session still waits for the user to do or decide.
 //!
-//! A Stop hook (`fleet --hook`) reads every finished answer and keeps one
+//! A hook (`fleet --hook`) reads every finished answer and keeps one
 //! small file per session, ~/.fleet/open/<session id>. An answer opens an
 //! item with a numbered row of its decisions table or a "Your move 7:"
 //! line, and closes items with a line "Closed: 3, 5". fleet lists the
@@ -9,13 +9,19 @@
 //! it, and a session that forgets to close one leaves a row the user can
 //! see and delete.
 //!
-//! A number is used once per session, so "3 y" from the user means the
-//! same item a week later. The hook sends an answer back once when a
-//! number is missing or taken, and names the numbers that are free.
+//! A closed item's number is free again, so the numbers stay small: a new
+//! item takes the lowest one that is not open. The hook sends an answer
+//! back once when a number is missing or taken, and names the first free
+//! one.
 //!
-//! Battery: the hook runs once per finished answer, never on a timer. The
-//! list costs fleet one stat of the folder per pass, and a read only after
-//! a file in it changed.
+//! The same hook reads each prompt of the user. A line that starts with
+//! an open item's number, as in "3 y", answers that item, and fleet hides
+//! it while the session works. At the end of the turn it shows again,
+//! unless the answer closed it.
+//!
+//! Battery: the hook runs once per prompt and once per finished answer,
+//! never on a timer. The list costs fleet one stat of the folder per pass,
+//! and a read only after a file in it changed.
 
 use crate::config::home;
 use serde_json::Value;
@@ -47,15 +53,14 @@ struct Item {
     text: String,
 }
 
-/// One session's file. `next` is the lowest number never used, and `base`
-/// is what it was when the current turn began: a new item takes a number
-/// from `base` up. `turn` counts the user's prompts that led to an answer
-/// with items, and `prompt` is the id of the last one.
+/// One session's file. `turn` counts the user's prompts that led to an
+/// answer with items, and `prompt` is the id of the last one. `answered`
+/// names the items the user's last prompt answered: they stay in the file
+/// and out of the list until the turn ends.
 struct Ledger {
-    next: u32,
-    base: u32,
     turn: u32,
     prompt: String,
+    answered: Vec<u32>,
     items: Vec<Item>,
 }
 
@@ -151,36 +156,60 @@ fn said(answer: &str) -> Said {
     out
 }
 
+/// The numbers a prompt of the user answers: each line that starts with
+/// one, as in "3 y", "3: the second" or a bare "3". "3rd" and "3.5" start
+/// a sentence.
+fn answers(prompt: &str) -> Vec<u32> {
+    prompt.lines()
+        .filter_map(|l| {
+            let l = l.trim_start();
+            let end = l.find(|c: char| !c.is_ascii_digit()).unwrap_or(l.len());
+            let mut rest = l[end..].chars();
+            let sentence = match rest.next() {
+                Some(c) if c.is_alphanumeric() => true,
+                Some('.') | Some(',') => rest.next().is_some_and(|c| c.is_ascii_digit()),
+                _ => false,
+            };
+            if sentence { None } else { l[..end].parse().ok() }
+        })
+        .collect()
+}
+
 impl Ledger {
     fn new() -> Ledger {
-        Ledger { next: 1, base: 1, turn: 0, prompt: String::new(), items: Vec::new() }
+        Ledger { turn: 0, prompt: String::new(), answered: Vec::new(), items: Vec::new() }
     }
 
     fn read(id: &str) -> Ledger {
         let mut l = Ledger::new();
         let Ok(text) = std::fs::read_to_string(file(id)) else { return l };
         let mut lines = text.lines();
-        let mut head = lines.next().unwrap_or("").split('\t');
-        l.next = head.next().and_then(|n| n.parse().ok()).unwrap_or(1);
-        l.base = head.next().and_then(|n| n.parse().ok()).unwrap_or(l.next);
-        l.turn = head.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-        l.prompt = head.next().unwrap_or("").to_string();
+        let head: Vec<&str> = lines.next().unwrap_or("").split('\t').collect();
+        // A file from before v0.3.48 starts with two numbers that are no longer used.
+        let head = &head[if head.len() == 4 { 2 } else { 0 }..];
+        l.turn = head.first().and_then(|n| n.parse().ok()).unwrap_or(0);
+        l.prompt = head.get(1).unwrap_or(&"").to_string();
+        l.answered = head.get(2).unwrap_or(&"").split(',').filter_map(|n| n.parse().ok()).collect();
         for line in lines {
             let mut f = line.splitn(4, '\t');
             let mut n = || f.next().and_then(|v| v.parse::<u64>().ok());
             if let (Some(num), Some(turn), Some(at)) = (n(), n(), n()) {
-                let num = num as u32;
-                l.next = l.next.max(num + 1);
-                l.items.push(Item { num, turn: turn as u32, at, text: f.next().unwrap_or("").to_string() });
+                l.items.push(Item { num: num as u32, turn: turn as u32, at, text: f.next().unwrap_or("").to_string() });
             }
         }
         l
     }
 
+    /// The lowest number that no open item has and `skip` does not name.
+    fn free(&self, skip: &[u32]) -> u32 {
+        (1..).find(|n| !skip.contains(n) && !self.items.iter().any(|i| i.num == *n)).unwrap_or(0)
+    }
+
     /// Write the file whole, through a temp file, so a reader never sees
     /// half of it and the folder's mtime tells fleet to read again.
     fn write(&self, id: &str) {
-        let mut out = format!("{}\t{}\t{}\t{}\n", self.next, self.base, self.turn, self.prompt);
+        let answered: Vec<String> = self.answered.iter().map(|n| n.to_string()).collect();
+        let mut out = format!("{}\t{}\t{}\n", self.turn, self.prompt, answered.join(","));
         for i in &self.items {
             out.push_str(&format!("{}\t{}\t{}\t{}\n", i.num, i.turn, i.at, i.text));
         }
@@ -197,13 +226,16 @@ impl Ledger {
     /// so this one belongs to the same turn whatever its id says.
     ///
     /// Returns what was wrong with the answer's numbers. An item with a
-    /// fault is still kept, under the next free number, and nothing is
+    /// fault is still kept, under the lowest free number, and nothing is
     /// dropped that the answer does not close: a row too many is seen
     /// and can be deleted, a question lost is not seen at all.
+    ///
+    /// A number the answer closes is free from the next answer on. In
+    /// one answer "Closed: 3" and a new item 3 would be two questions
+    /// under one number, right after the user wrote "3 y".
     fn apply(&mut self, said: &Said, prompt: &str, again: bool, now: u64) -> Vec<String> {
         if !(again || (!prompt.is_empty() && prompt == self.prompt)) {
             self.turn += 1;
-            self.base = self.next;
             self.prompt = prompt.to_string();
         }
         let turn = self.turn;
@@ -227,29 +259,30 @@ impl Ledger {
                     faults.push(format!("number {} is open as \"{}\"", n, short(&i.text)));
                     late.push(text);
                 }
-                None if n < self.base => {
-                    faults.push(format!("number {} was used before", n));
+                None if said.closed.contains(&n) => {
+                    faults.push(format!("number {} is closed in this answer and free from the next one", n));
                     late.push(text);
                 }
-                None => {
-                    self.items.push(Item { num: n, turn, at: now, text: text.clone() });
-                    self.next = self.next.max(n + 1);
-                }
+                None => self.items.push(Item { num: n, turn, at: now, text: text.clone() }),
             }
         }
         for text in late {
             if !self.items.iter().any(|i| i.text == *text) {
-                self.items.push(Item { num: self.next, turn, at: now, text: text.clone() });
-                self.next += 1;
+                let num = self.free(&said.closed);
+                self.items.push(Item { num, turn, at: now, text: text.clone() });
             }
         }
         faults
     }
 }
 
-/// A session's open items, lowest number first.
-pub fn load(id: &str) -> Vec<Open> {
-    let mut items: Vec<Open> = Ledger::read(id).items.into_iter()
+/// A session's open items, lowest number first. An item the user has
+/// answered is left out while the session works on it, unless `all` asks
+/// for it: the session itself must still see it, to close it.
+pub fn load(id: &str, all: bool) -> Vec<Open> {
+    let l = Ledger::read(id);
+    let mut items: Vec<Open> = l.items.into_iter()
+        .filter(|i| all || !l.answered.contains(&i.num))
         .map(|i| Open { num: i.num, at: i.at, text: i.text })
         .collect();
     items.sort_by_key(|i| i.num);
@@ -268,22 +301,38 @@ pub fn forget(id: &str) {
     let _ = std::fs::remove_file(file(id));
 }
 
-/// The Stop hook. Takes the hook's JSON, updates the session's file, and
-/// returns the line to print when the answer has to be written again.
-/// It sends an answer back once per turn at most, and an answer that
-/// opens and closes nothing touches no file.
+/// The hook, at two moments. At a prompt of the user it hides the items
+/// the prompt answers. At the end of an answer it takes the answer in,
+/// shows what was hidden and not closed, and returns the line to print
+/// when the answer has to be written again. It sends an answer back once
+/// per turn at most, and it writes a file only when something changed.
 pub fn hook(input: &str, now: u64) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
+    let id = v["session_id"].as_str()?;
+    if v["hook_event_name"] == "UserPromptSubmit" {
+        let mut l = Ledger::read(id);
+        let mut nums = answers(v["prompt"].as_str()?);
+        nums.retain(|n| l.items.iter().any(|i| i.num == *n));
+        if nums != l.answered {
+            l.answered = nums;
+            l.write(id);
+        }
+        return None;
+    }
     if v["hook_event_name"] != "Stop" {
         return None;
     }
-    let id = v["session_id"].as_str()?;
     let said = said(v["last_assistant_message"].as_str()?);
+    let mut l = Ledger::read(id);
+    let hidden = !l.answered.is_empty();
+    l.answered.clear();
     if said.items.is_empty() && said.closed.is_empty() && said.faults.is_empty() {
+        if hidden {
+            l.write(id);
+        }
         return None;
     }
     let again = v["stop_hook_active"].as_bool().unwrap_or(false);
-    let mut l = Ledger::read(id);
     let faults = l.apply(&said, v["prompt_id"].as_str().unwrap_or(""), again, now);
     l.write(id);
     if faults.is_empty() || again {
@@ -296,13 +345,14 @@ pub fn hook(input: &str, now: u64) -> Option<String> {
     let reason = format!(
         "fleet lists what you still ask of the user, and this answer does not fit its list: {}. \
          Each decisions row has a number in its # column, and each action reads \
-         \"Your move N: ...\". A number is used once in a session: new items in this answer \
-         take numbers from {} up. Open from before: {}. An open item keeps its number and \
+         \"Your move N: ...\". A new item takes the lowest number that is not open, \
+         from {} up. Open from before: {}. An open item keeps its number and \
          its question. Close one that is answered, done or dropped with a line \
-         \"Closed: N, M\" (numbers only) above the moves. Write the answer again with the \
-         numbers put right.",
+         \"Closed: N, M\" (numbers only) above the moves. A number closed in this answer \
+         is free from the next answer on. Write the answer again with the numbers put right.",
         faults.join("; "),
-        l.base,
+        (1..).find(|n| !said.closed.contains(n) && !l.items.iter().any(|i| i.num == *n && i.turn != l.turn))
+            .unwrap_or(0),
         if open.is_empty() { "none".to_string() } else { open.join(", ") },
     );
     Some(serde_json::json!({"decision": "block", "reason": reason}).to_string())
@@ -375,17 +425,67 @@ mod tests {
     }
 
     #[test]
-    fn a_number_is_used_once() {
+    fn a_closed_number_is_free_again() {
         let mut l = Ledger::new();
         turns(&mut l, &["Your move 1: run it\nYour move 2: look", "Closed: 1"]);
-        // 1 is closed and 2 is open: neither is free for a new item.
+        // 1 is closed and free for a new item. 2 is open and taken.
         let faults = turns(&mut l, &["Your move 1: again\nYour move 2: other\nYour move: bare"]);
-        assert_eq!(faults.len(), 3);
-        // Nothing asked is lost: the three take the next free numbers.
-        assert_eq!(open(&l), vec![(2, "look"), (3, "again"), (4, "other"), (5, "bare")]);
+        assert_eq!(faults.len(), 2);
+        // Nothing asked is lost: the two take the lowest free numbers.
+        assert_eq!(open(&l), vec![(2, "look"), (1, "again"), (3, "other"), (4, "bare")]);
         // An open item listed again, word for word, is fine.
         assert!(turns(&mut l, &["Your move 2: look"]).is_empty());
         assert_eq!(l.items.len(), 4);
+    }
+
+    #[test]
+    fn a_number_closed_in_an_answer_waits_for_the_next() {
+        let mut l = Ledger::new();
+        turns(&mut l, &["Your move 1: run it"]);
+        // The user wrote "1 y": a new item 1 in the answer to that would mix the two up.
+        assert_eq!(turns(&mut l, &["Closed: 1\nYour move 1: restart"]).len(), 1);
+        assert_eq!(open(&l), vec![(2, "restart")]);
+        assert!(turns(&mut l, &["Your move 1: look"]).is_empty());
+        assert_eq!(open(&l), vec![(2, "restart"), (1, "look")]);
+    }
+
+    #[test]
+    fn an_answered_item_is_hidden_until_the_turn_ends() {
+        assert_eq!(answers("1 y\n2nd try failed\n3.5 is the size\n  4: the second\n5.\n6\nSee 7"), vec![1, 4, 5, 6]);
+        let id = format!("test-answer-{}", std::process::id());
+        let event = |name: &str, key: &str, text: &str, prompt: &str| serde_json::json!({
+            "hook_event_name": name, "session_id": id, "prompt_id": prompt, key: text}).to_string();
+        let stop = |text: &str, prompt: &str| hook(&event("Stop", "last_assistant_message", text, prompt), 100);
+        let says = |text: &str, prompt: &str| hook(&event("UserPromptSubmit", "prompt", text, prompt), 100);
+        let listed = || load(&id, false).iter().map(|i| i.num).collect::<Vec<u32>>();
+        stop("Your move 1: run it\nYour move 2: look\nYour move 3: wait", "p1");
+        // 1 is answered. 9 is not open, and "2nd" starts a sentence.
+        assert_eq!(says("1 y\n2nd try failed\n9 n", "p2"), None);
+        assert_eq!(listed(), vec![2, 3]);
+        assert_eq!(load(&id, true).len(), 3, "the session still sees it");
+        // The answer closes nothing, so 1 shows again.
+        stop("Looked at it.", "p2");
+        assert_eq!(listed(), vec![1, 2, 3]);
+        says("Fine.\n2: yes\n3", "p3");
+        assert_eq!(listed(), vec![1]);
+        stop("Closed: 2", "p3");
+        assert_eq!(listed(), vec![1, 3]);
+        // A prompt with no answer in it shows what an unfinished turn left hidden.
+        says("3 y", "p4");
+        says("And one more thing.", "p5");
+        assert_eq!(listed(), vec![1, 3]);
+        forget(&id);
+    }
+
+    #[test]
+    fn a_file_from_an_older_fleet_is_read() {
+        let id = format!("test-old-{}", std::process::id());
+        let _ = std::fs::create_dir_all(dir());
+        std::fs::write(file(&id), "5\t4\t7\tp9\n3\t2\t100\told item\n").unwrap();
+        let l = Ledger::read(&id);
+        assert_eq!((l.turn, l.prompt.as_str(), l.answered.len()), (7, "p9", 0));
+        assert_eq!(open(&l), vec![(3, "old item")]);
+        forget(&id);
     }
 
     #[test]
@@ -406,7 +506,6 @@ mod tests {
         // The rewrite numbers and rewords it. Its prompt id may differ.
         assert!(l.apply(&said("Your move 2: run the script"), "", true, 100).is_empty());
         assert_eq!(open(&l), vec![(1, "old"), (2, "run the script")]);
-        assert_eq!(l.next, 3);
     }
 
     #[test]
@@ -430,13 +529,14 @@ mod tests {
         let out = hook(&stop("Your move: run it", false), 100).unwrap();
         assert!(out.contains("\"block\"") && out.contains("from 1 up"), "{}", out);
         assert_eq!(hook(&stop("Your move: run it", true), 200), None, "never twice");
-        assert_eq!(load(&id), vec![Open { num: 1, at: 100, text: "run it".into() }]);
+        assert_eq!(load(&id, false), vec![Open { num: 1, at: 100, text: "run it".into() }]);
         let other = serde_json::json!({"hook_event_name": "SubagentStop", "session_id": id,
             "last_assistant_message": "Your move 5: x"}).to_string();
         assert_eq!(hook(&other, 100), None);
         delete(&id, 1);
-        assert!(load(&id).is_empty());
-        assert_eq!(Ledger::read(&id).next, 2, "a deleted number is not handed out again");
+        assert!(load(&id, false).is_empty());
+        assert_eq!(hook(&stop("Your move 1: look", false), 300), None, "a deleted number is free again");
+        assert_eq!(load(&id, false).len(), 1);
         forget(&id);
         assert!(!file(&id).exists());
     }

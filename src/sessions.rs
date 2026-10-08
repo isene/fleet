@@ -100,6 +100,8 @@ pub struct Cache {
     /// folder that holds them changed: one stat per pass, no reads.
     open: HashMap<String, Vec<crate::open::Open>>,
     open_at: SystemTime,
+    /// List the items the user has answered too, as `--moves` does.
+    pub answered: bool,
 }
 
 impl Cache {
@@ -110,6 +112,7 @@ impl Cache {
             procs_at: SystemTime::UNIX_EPOCH,
             open: HashMap::new(),
             open_at: SystemTime::UNIX_EPOCH,
+            answered: false,
         }
     }
 }
@@ -141,6 +144,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
     let open_at = std::fs::metadata(crate::open::dir())
         .and_then(|m| m.modified())
         .unwrap_or(SystemTime::UNIX_EPOCH);
+    let answered = cache.answered;
     if open_at != cache.open_at {
         cache.open.clear();
         cache.open_at = open_at;
@@ -213,7 +217,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 }
             };
             let moves = cache.open.entry(id.clone())
-                .or_insert_with(|| crate::open::load(&id))
+                .or_insert_with(|| crate::open::load(&id, answered))
                 .clone();
             let tagged = tags.contains_key(&id);
             let tag = tags.get(&id).cloned().unwrap_or_else(|| {

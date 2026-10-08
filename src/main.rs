@@ -132,8 +132,8 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 fn main() {
-    // The Stop hook of every Claude session: first, and done before
-    // anything is loaded, since it runs at the end of each answer.
+    // The hook of every Claude session: first, and done before anything
+    // is loaded, since it runs at each prompt and at the end of each answer.
     if std::env::args().nth(1).as_deref() == Some("--hook") {
         let mut input = String::new();
         let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
@@ -155,7 +155,7 @@ fn main() {
         println!("  --today    print today's token rollup per session and exit");
         println!("  --moves    print what each session waits for you to do or decide and exit");
         println!("  --wake TAG type the check-messages prompt into that open session and exit");
-        println!("  --hook     Claude Code Stop hook: keep the session's list of open items");
+        println!("  --hook     Claude Code hook: keep the session's list of open items");
         println!();
         println!("Sessions with state (working / YOURS / CAPPED / idle / off), workspace and");
         println!("context size, plus the inbox folders where handoffs land.");
@@ -184,6 +184,7 @@ fn main() {
     }
 
     if std::env::args().skip(1).any(|a| a == "--moves") {
+        cache.answered = true; // a session reads this to know what it must close
         let rows = move_rows(&sessions::scan(&cfg, &mut cache));
         if rows.is_empty() {
             println!("no open items");
