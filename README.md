@@ -104,9 +104,10 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `c` today's token rollup per session (Esc back)
 - `v` popup with your open moves, from all sessions. A session that
   needs something from you starts a line of its answer with
-  `Your move:`. fleet lists those lines from each session's last
-  answer, and the header counts them. Your next prompt to a session
-  clears its rows
+  `Your move:`, and puts what you must decide in a table with a
+  `Question` column. fleet lists those lines and table rows from each
+  session's last answer, and the header counts them. Your next prompt
+  to a session clears its rows
 - `o` / `Enter` on an inbox item: open it. A program that runs in a
   terminal (an editor, a PDF reader) gets a glass of its own
 - `o` / `Enter` on a `msg` row: hand the message to the session it is

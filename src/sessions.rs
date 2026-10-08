@@ -383,19 +383,41 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
     Some(info)
 }
 
-/// The "Your move:" lines of an answer: what the user must do or decide.
-/// A session starts such a line with those words, as a list item or in
-/// bold or bare. A mention further into a line is not one.
+/// What an answer asks of the user: its "Your move:" lines and the rows
+/// of its decisions table, in the order they stand.
+/// A session starts a move line with those words, as a list item or in
+/// bold or bare. A mention further into a line is not one. A decisions
+/// table is one with a "Question" column; a row reads "1. question →
+/// recommendation".
 fn moves_in(answer: &str) -> Vec<String> {
-    answer
-        .lines()
-        .filter_map(|l| {
-            let l = l.trim_start_matches(|c: char| c == '-' || c == '*' || c.is_whitespace());
-            let rest = l.strip_prefix("Your move:")?;
-            let rest = rest.trim_start_matches(|c: char| c == '*' || c.is_whitespace()).trim_end();
-            (!rest.is_empty()).then(|| rest.chars().take(240).collect())
-        })
-        .collect()
+    let mut out = Vec::new();
+    let mut question: Option<usize> = None; // its column, inside a decisions table
+    for l in answer.lines() {
+        if let Some(row) = l.trim().strip_prefix('|') {
+            let cells: Vec<&str> = row.trim_end_matches('|').split('|').map(str::trim).collect();
+            match question {
+                None => question = cells.iter().position(|c| c.eq_ignore_ascii_case("question")),
+                Some(q) if q < cells.len() && cells[q].chars().any(|c| c != '-' && c != ':') => {
+                    let mut s = if q > 0 { format!("{}. {}", cells[0], cells[q]) } else { cells[q].to_string() };
+                    if let Some(rec) = cells.get(q + 1).filter(|r| !r.is_empty()) {
+                        s.push_str(" → ");
+                        s.push_str(rec);
+                    }
+                    out.push(s.chars().take(240).collect());
+                }
+                Some(_) => {} // the rule under the header, or a short row
+            }
+            continue;
+        }
+        question = None;
+        let l = l.trim_start_matches(|c: char| c == '-' || c == '*' || c.is_whitespace());
+        let Some(rest) = l.strip_prefix("Your move:") else { continue };
+        let rest = rest.trim_start_matches(|c: char| c == '*' || c.is_whitespace()).trim_end();
+        if !rest.is_empty() {
+            out.push(rest.chars().take(240).collect());
+        }
+    }
+    out
 }
 
 /// A real user prompt: string content, or a text block in the array.
@@ -660,6 +682,20 @@ mod tests {
     #[test]
     fn a_mention_inside_a_line_is_not_a_move() {
         assert!(moves_in("It lists every \"Your move:\" line.").is_empty());
+    }
+
+    #[test]
+    fn each_row_of_a_decisions_table_is_a_move() {
+        let a = "Built.\n\n| # | Question | My recommendation |\n|---|:--|---|\n\
+                 | 1 | Ship it? | Yes: the tests pass |\n| 2 | Rename it? | |\n\n\
+                 Your move: run the script\n";
+        assert_eq!(moves_in(a), vec![
+            "1. Ship it? → Yes: the tests pass", "2. Rename it?", "run the script"]);
+    }
+
+    #[test]
+    fn a_table_with_no_question_column_asks_nothing() {
+        assert!(moves_in("| File | Size |\n|---|---|\n| a.rs | 12 |\n").is_empty());
     }
 
     #[test]
