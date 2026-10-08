@@ -1350,21 +1350,52 @@ fn move_rows(sess: &[Session]) -> Vec<String> {
 /// What every session waits for the user to do or decide, in a popup.
 /// The rows come from the tails the scan already read: no file is opened.
 fn show_moves(sess: &[Session]) {
-    let rows = move_rows(sess);
-    let mut t = String::new();
-    if rows.is_empty() {
-        t.push_str(" no open moves");
-    }
-    for r in &rows {
-        t.push_str(&format!(" {}\n", r));
-    }
     let (cols, lines) = Crust::terminal_size();
     let w = cols.saturating_sub(8).clamp(40, 110);
-    // A long move wraps, so count the lines it will take.
-    let inner = (w as usize).saturating_sub(3);
-    let need: usize = rows.iter().map(|r| visible_len(r) / inner + 1).sum();
+    let open: Vec<&Session> = sess.iter().filter(|s| !s.moves.is_empty()).collect();
+    let tag_w = open.iter().map(|s| s.tag.chars().count()).max().unwrap_or(0);
+    // The tag, the age and the gaps between them: where the text starts.
+    let indent = tag_w + 9;
+    let room = (w as usize).saturating_sub(4 + indent);
+    let mut t = String::new();
+    let mut need = 0;
+    for s in open {
+        // The tag wears the colour it has in the session list.
+        let tag = style::fg(&format!("{:<tag_w$}", s.tag), if s.tagged { 13 } else { 250 });
+        for m in &s.moves {
+            let text = hang(m, indent, room);
+            need += text.len();
+            t.push_str(&format!(" {} {:>6}  {}\n", tag, fmt_age(s.age_secs), text.join("\n ")));
+        }
+    }
+    if need == 0 {
+        t.push_str(" no open moves");
+    }
     let h = ((need.max(1) + 2) as u16).clamp(5, lines.saturating_sub(4));
     Popup::centered(w, h, 231, 236).view(t.trim_end_matches('\n'));
+}
+
+/// Text broken at spaces into lines of at most `width` cells. Every line
+/// after the first starts with `indent` spaces, so a wrapped line stays
+/// in the column the first one started in.
+fn hang(text: &str, indent: usize, width: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    let mut used = 0; // cells of text on the line being filled
+    for word in text.split_whitespace() {
+        let n = visible_len(word);
+        if used > 0 && used + 1 + n > width {
+            lines.push(" ".repeat(indent));
+            used = 0;
+        }
+        let cur = lines.last_mut().unwrap();
+        if used > 0 {
+            cur.push(' ');
+            used += 1;
+        }
+        cur.push_str(word);
+        used += n;
+    }
+    lines
 }
 
 /// Append one line to the bus log. Fleet logs only phone-bound sends it
@@ -1564,6 +1595,12 @@ mod width_tests {
         // at ten, whatever it holds.
         assert_eq!(visible_len(&clip("👍", 10)), 10);
         assert_eq!(visible_len(&clip("hello", 10)), 10);
+    }
+
+    #[test]
+    fn a_wrapped_move_stays_in_its_column() {
+        let lines = hang("answer the rows above by number today", 4, 12);
+        assert_eq!(lines, vec!["answer the", "    rows above", "    by number", "    today"]);
     }
 
     #[test]
