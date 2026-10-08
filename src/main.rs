@@ -289,8 +289,11 @@ fn main() {
     // session was last woken by fleet itself.
     let mut auto_woken: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
     let mut auto_times: std::collections::HashMap<String, Vec<std::time::Instant>> = std::collections::HashMap::new();
+    // Set once a newer build has replaced the file this fleet runs from.
+    let mut old = false;
 
     loop {
+        old = old || rebuilt();
         let map = wm.as_ref().map(|w| w.refresh()).unwrap_or_default();
         let mut sess = sessions::scan(&cfg, &mut cache);
         for s in &mut sess {
@@ -446,7 +449,7 @@ fn main() {
                        focus == Focus::Inbox, sel_i, &marked, &logs, &addrs);
         }
         draw_footer(cols, rows, focus, &flash,
-                    rollup_rows.is_some(), &msg_to, &msg_buf);
+                    rollup_rows.is_some(), &msg_to, &msg_buf, old);
 
         let key = Input::getchr(Some(2));
         if key.is_some() {
@@ -1602,9 +1605,27 @@ fn help() {
     Popup::centered(w, h, 231, 236).view(&t);
 }
 
+/// True once the file this fleet was started from is gone, which is
+/// what a new build leaves behind. The kernel then marks the link
+/// " (deleted)". A fleet that keeps running shows what the old code
+/// knew, so the footer has to say it.
+fn rebuilt() -> bool {
+    std::fs::read_link("/proc/self/exe")
+        .map(|p| p.to_string_lossy().ends_with(" (deleted)"))
+        .unwrap_or(false)
+}
+
+fn version_tag(old: bool) -> String {
+    if old {
+        style::styled(&format!("fleet v{} is old: restart ", VERSION), Some(208), None, "b")
+    } else {
+        format!("fleet v{} ", VERSION)
+    }
+}
+
 fn draw_footer(cols: u16, rows: u16, focus: Focus,
                flash: &str, in_rollup: bool, msg_to: &Option<(String, String)>,
-               msg_buf: &str) {
+               msg_buf: &str, old: bool) {
     let mut pane = Pane::new(1, rows, cols, 1, 244, 236);
     let left = if let Some((_, tag)) = msg_to {
         format!(" msg → {}: {}_  (Enter send · Esc cancel)", tag, msg_buf)
@@ -1618,9 +1639,9 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · ? help".to_string(),
         }
     };
-    let right = format!("fleet v{} ", VERSION);
+    let right = version_tag(old);
     let mut line = left;
-    let pad_n = (cols as usize).saturating_sub(visible_len(&line) + right.len());
+    let pad_n = (cols as usize).saturating_sub(visible_len(&line) + visible_len(&right));
     line.push_str(&" ".repeat(pad_n));
     line.push_str(&right);
     paint(&mut pane, &line);
@@ -1694,6 +1715,16 @@ mod open_tests {
 #[cfg(test)]
 mod width_tests {
     use super::*;
+
+    #[test]
+    fn an_old_fleet_says_so_in_the_footer() {
+        // The test binary is still on disk, so it is not old.
+        assert!(!rebuilt());
+        assert!(!version_tag(false).contains("restart"));
+        let tag = version_tag(true);
+        assert!(tag.contains("is old: restart"), "{}", tag);
+        assert_eq!(visible_len(&tag), visible_len(&version_tag(false)) + 16);
+    }
 
     #[test]
     fn a_two_cell_emoji_counts_as_two() {

@@ -231,6 +231,9 @@ per session file (transcript tails are re-read only when mtime
 changed), one `readdir` per inbox folder, and one `stat` of the
 open-items folder, whose files are read again only after it changed.
 
+One `readlink` per tick tells fleet when a newer build has replaced
+the file it runs from. The footer then reads "is old: restart".
+
 The token rollup reads whole transcripts, so it runs only on demand
 (`c` or `--today`), never on the tick.
 
