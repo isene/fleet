@@ -104,9 +104,9 @@ fn take_cells(s: &str, max: usize) -> String {
 /// spans end in, re-armed after every reset the way crust's select_bar
 /// re-arms reverse. Foreground colors stay.
 fn bg_keep(s: &str, bg: u8) -> String {
-    let arm = format!("\x1b[48;5;{}m", bg);
-    format!("{}{}\x1b[49m",
-            arm, s.replace("\x1b[0m", &format!("\x1b[0m{}", arm)))
+    let arm = style::set_bg(bg);
+    format!("{}{}{}",
+            arm, s.replace(style::RESET, &format!("{}{}", style::RESET, arm)), style::reset_bg())
 }
 
 /// The selection bar run out to the right edge, so the whole row reads
@@ -1941,7 +1941,7 @@ mod width_tests {
 
     #[test]
     fn colour_codes_are_not_counted() {
-        let painted = format!("\x1b[38;5;208m{}\x1b[0m", "abc");
+        let painted = style::fg("abc", 208);
         assert_eq!(visible_len(&painted), 3);
     }
 }
