@@ -393,19 +393,63 @@ fn user_text(content: &Value) -> Option<String> {
     };
     let clean = text.replace('\n', " ");
     let clean = clean.trim();
+    if not_the_user(clean) {
+        return None;
+    }
+    Some(clean.chars().take(240).collect())
+}
+
+/// Text in a user entry that the user did not type.
+pub fn not_the_user(clean: &str) -> bool {
     if clean.starts_with('<') {
-        return None; // system-reminder / command wrapper, not the user
+        return true; // system-reminder / command wrapper, not the user
     }
     // Hook feedback and interrupts are typed as user entries but are not
     // the user's prompt; skip them so an earlier real prompt surfaces.
-    for noise in ["Stop hook feedback:", "[Request interrupted", "Caveat:",
-                  "Base directory for this skill:", "# ",
-                  "This session is being continued from"] {
-        if clean.starts_with(noise) {
-            return None;
-        }
-    }
-    Some(clean.chars().take(240).collect())
+    ["Stop hook feedback:", "[Request interrupted", "Caveat:",
+     "Base directory for this skill:", "# ",
+     "This session is being continued from"]
+        .iter()
+        .any(|noise| clean.starts_with(noise))
+}
+
+/// A session the list leaves out, old and with no bookmark, read from
+/// its transcript: enough to name it and to resume it. Whether a claude
+/// still runs on it is for the caller to ask, with `pid_of`.
+pub fn stray(path: &Path, tags: &HashMap<String, String>) -> Option<Session> {
+    let info = read_tail(path)?;
+    let id = path.file_stem()?.to_string_lossy().to_string();
+    let age_secs = std::fs::metadata(path).and_then(|m| m.modified()).ok()
+        .and_then(|m| SystemTime::now().duration_since(m).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let tagged = tags.contains_key(&id);
+    let tag = tags.get(&id).cloned().unwrap_or_else(|| {
+        Path::new(&info.cwd)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "?".into())
+    });
+    Some(Session {
+        id, tag, tagged,
+        path: path.to_path_buf(),
+        cwd: info.cwd,
+        state: State::Off,
+        age_secs,
+        model: info.model,
+        prompt: info.prompt,
+        pid: None,
+        ws: None,
+        ctx_k: info.ctx_k,
+        at_prompt: false,
+        moves: Vec::new(),
+    })
+}
+
+/// The claude that runs this session, if one does. A sweep of /proc, so
+/// for one question at a time, never for a list.
+pub fn pid_of(id: &str) -> Option<u32> {
+    claude_procs().get(id).copied()
 }
 
 /// "claude-fable-5-1[1m]" → "Fable 5.1", "claude-haiku-4-5-20251001" → "Haiku 4.5".

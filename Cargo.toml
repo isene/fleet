@@ -1,6 +1,6 @@
 [package]
 name = "fleet"
-version = "0.3.50"
+version = "0.3.51"
 edition = "2021"
 authors = ["Geir Isene <g@isene.com>"]
 description = "Claude Code mission control: live session states, workspace attribution, and inbox watch (scrots, phone transfers). Part of the Fe2O3 Rust terminal suite."
@@ -12,6 +12,8 @@ crust = { version = "0.1", path = "../crust", package = "fe2o3-crust" }
 serde_json = "1"
 x11rb = { version = "0.13", default-features = false }
 libc = "0.2"
+# In the tree already, through serde_json. The search reads 2 GB with it.
+memchr = "2"
 
 [profile.release]
 opt-level = 3

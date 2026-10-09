@@ -15,6 +15,7 @@ mod config;
 mod inbox;
 mod open;
 mod rollup;
+mod search;
 mod sessions;
 mod winmap;
 
@@ -149,11 +150,12 @@ fn main() {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("fleet — Claude Code mission control (Fe2O3 suite)");
         println!();
-        println!("Usage: fleet [--list | --today | --moves | --wake TAG | --hook]");
+        println!("Usage: fleet [--list | --today | --moves | --search WORDS | --wake TAG | --hook]");
         println!();
         println!("  --list     print sessions and inbox as text and exit");
         println!("  --today    print today's token rollup per session and exit");
         println!("  --moves    print what each session waits for you to do or decide and exit");
+        println!("  --search WORDS print what any session said with all the words in it, newest first, and exit");
         println!("  --wake TAG type the check-messages prompt into that open session and exit");
         println!("  --hook     Claude Code hook: keep the session's list of open items");
         println!();
@@ -191,6 +193,23 @@ fn main() {
         }
         for r in rows {
             println!("{}", r);
+        }
+        return;
+    }
+
+    if let Some(i) = std::env::args().position(|a| a == "--search") {
+        let query = std::env::args().skip(i + 1).collect::<Vec<_>>().join(" ");
+        if query.trim().is_empty() {
+            println!("fleet --search WORDS: what any session said with all the words in it");
+            return;
+        }
+        let hits = search::run(&query, 100);
+        if hits.is_empty() {
+            println!("no session said: {}", query.trim());
+        }
+        let names = hit_names(&hits, &sessions::scan(&cfg, &mut cache));
+        for r in found_rows(&hits, &search::words(&query), &names, 200, now_secs()) {
+            println!("{}", crust::strip_ansi(&r).trim_start());
         }
         return;
     }
@@ -441,6 +460,9 @@ fn main() {
                 unpaint();
             }
         }
+        if let Some(Over::Found(f)) = &mut over {
+            f.draw();
+        }
         if over.is_none() {
             refresh_rates(&mut rates);
             draw_header(cols, &sess, &items, &rates.1);
@@ -489,6 +511,23 @@ fn main() {
                         sel_path = Some(s.path.clone());
                         focus = Focus::Sessions;
                         flash = enter_session(wm.as_ref(), s, cfg.session_prefs.get(&s.tag));
+                    }
+                }
+                Step::Open(path) => {
+                    over = None;
+                    if let Some(i) = sess.iter().position(|s| s.path == path) {
+                        let s = &sess[i];
+                        sel_s = i;
+                        sel_path = Some(s.path.clone());
+                        focus = Focus::Sessions;
+                        flash = enter_session(wm.as_ref(), s, cfg.session_prefs.get(&s.tag));
+                    } else if let Some(mut s) = sessions::stray(&path, &sessions::load_tags()) {
+                        // Not in the list, yet a claude may still sit on
+                        // it. A second one on the same transcript is the
+                        // duplicate session of 2026-09-21.
+                        s.pid = sessions::pid_of(&s.id);
+                        s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
+                        flash = enter_session(wm.as_ref(), &s, cfg.session_prefs.get(&s.tag));
                     }
                 }
             }
@@ -843,6 +882,29 @@ fn main() {
             Some("?") | Some("h") => over = Some(help()),
             Some("M") => over = Some(show_log()),
             Some("v") => over = Some(Moves::open(&sess)),
+            Some("/") => {
+                // Search what every session has said. It reads every
+                // transcript, so it runs here, on the key, and nowhere else.
+                let mut p = Pane::new(1, rows, cols, 1, 231, 236);
+                if let Some(q) = p.ask_or_cancel(" search what the sessions said: ", "") {
+                    let q = q.trim();
+                    if !q.is_empty() {
+                        // The footer says what is going on while the
+                        // files are read, and is itself again after.
+                        flash = format!("reading every transcript for: {}", q);
+                        draw_footer(cols, rows, focus, &flash,
+                                    rollup_rows.is_some(), &msg_to, &msg_buf, old);
+                        over = Some(Found::open(q, &sess));
+                        flash.clear();
+                    }
+                }
+                if over.is_some() {
+                    // The panes are not painted under a popup, and the
+                    // prompt wrote over the footer.
+                    draw_footer(cols, rows, focus, &flash,
+                                rollup_rows.is_some(), &msg_to, &msg_buf, old);
+                }
+            }
             Some("RESIZE") => {
                 let (c, r) = Crust::terminal_size();
                 cols = c;
@@ -1460,6 +1522,8 @@ enum Over {
     Text(Popup),
     /// The open items.
     Moves(Moves),
+    /// What a search found.
+    Found(Found),
 }
 
 /// What a key did to an open popup.
@@ -1468,6 +1532,8 @@ enum Step {
     Close,
     /// Close, and go to the session at this place in the list.
     Jump(usize),
+    /// Close, and go to the session with this transcript, listed or not.
+    Open(std::path::PathBuf),
 }
 
 impl Over {
@@ -1480,6 +1546,7 @@ impl Over {
     fn key(&mut self, k: &str, sess: &[Session]) -> Step {
         let pop = match self {
             Over::Moves(m) => return m.key(k, sess),
+            Over::Found(f) => return f.key(k),
             Over::Text(pop) => pop,
         };
         match k {
@@ -1601,6 +1668,208 @@ impl Moves {
     }
 }
 
+/// How many messages a search lists.
+const FOUND_MAX: usize = 300;
+
+/// The name each found message goes by: the tag of its session, and
+/// whether that tag is a bookmark. A session the list leaves out is
+/// named from its transcript.
+fn hit_names(hits: &[search::Hit], sess: &[Session]) -> std::collections::HashMap<String, (String, bool)> {
+    let tags = sessions::load_tags();
+    let mut names = std::collections::HashMap::new();
+    for h in hits {
+        if names.contains_key(&h.id) {
+            continue;
+        }
+        let name = match sess.iter().find(|s| s.id == h.id) {
+            Some(s) => (s.tag.clone(), s.tagged),
+            None => sessions::stray(&h.path, &tags)
+                .map(|s| (s.tag, s.tagged))
+                .unwrap_or_else(|| ("?".into(), false)),
+        };
+        names.insert(h.id.clone(), name);
+    }
+    names
+}
+
+/// One row per found message: the session, how long ago, who said it,
+/// and the line around the first word found.
+fn found_rows(hits: &[search::Hit], words: &[String],
+              names: &std::collections::HashMap<String, (String, bool)>,
+              w: usize, now: u64) -> Vec<String> {
+    let name = |h: &search::Hit| names.get(&h.id).cloned().unwrap_or_else(|| ("?".into(), false));
+    let tag_w = hits.iter().map(|h| name(h).0.chars().count()).max().unwrap_or(0);
+    // The tag, the age, who, and the gaps: where the line starts.
+    let room = w.saturating_sub(4 + tag_w + 17);
+    hits.iter().map(|h| {
+        let (tag, tagged) = name(h);
+        let tag = style::styled(&format!("{:<tag_w$}", tag), Some(if tagged { 13 } else { 250 }), None, "");
+        let who = style::styled(if h.user { "you   " } else { "Claude" }, Some(244), None, "");
+        format!(" {} {:>6} {}  {}", tag, fmt_age(now.saturating_sub(h.at)), who,
+                search::marked(&search::snippet(&h.text, words, room), words))
+    }).collect()
+}
+
+/// Seconds since 1970 as the date and time here: "2026-09-19 19:53".
+fn local_stamp(at: u64) -> String {
+    // `as _`: the C type for a time differs between the three builds.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&(at as _), &mut tm) };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min)
+}
+
+/// What a search found, in a popup: one row per message, newest first.
+/// Up/Down move the bar, Space shows the whole message, and Enter goes
+/// to the session that said it. Nothing is read while it is open: the
+/// search ran once, when it was asked for.
+struct Found {
+    pop: Popup,
+    w: u16,
+    h: u16,
+    words: Vec<String>,
+    head: String,
+    hits: Vec<search::Hit>,
+    names: std::collections::HashMap<String, (String, bool)>,
+    rows: Vec<String>,
+    /// The row under the bar, and the first row on screen.
+    at: usize,
+    top: usize,
+    /// The whole message under the bar, while it is being read.
+    reading: Option<Popup>,
+    dirty: bool,
+}
+
+impl Found {
+    fn open(query: &str, sess: &[Session]) -> Over {
+        let hits = search::run(query, FOUND_MAX);
+        let (cols, lines) = Crust::terminal_size();
+        let w = cols.saturating_sub(8).clamp(40, 140);
+        if hits.is_empty() {
+            return Over::text(w.min(70), 5, &format!(" no session said: {}", query));
+        }
+        let words = search::words(query);
+        let names = hit_names(&hits, sess);
+        let rows = found_rows(&hits, &words, &names, w as usize, now_secs());
+        let count = if hits.len() == FOUND_MAX {
+            format!("the newest {} places", FOUND_MAX)
+        } else if hits.len() == 1 {
+            "1 place".to_string()
+        } else {
+            format!("{} places", hits.len())
+        };
+        let head = style::styled(
+            &format!(" {} with \"{}\" · Space reads it · Enter goes to its session", count, query),
+            Some(244), None, "");
+        // As tall as the screen allows, few rows or many: a message
+        // read from the list opens in the same box.
+        let h = lines.saturating_sub(4).max(5);
+        let mut pop = Popup::centered(w, h, 231, 236);
+        pop.pane.wrap = false;
+        pop.pane.border_refresh();
+        Over::Found(Found {
+            pop, w, h, words, head, hits, names, rows,
+            at: 0, top: 0, reading: None, dirty: true,
+        })
+    }
+
+    /// Paint the list, when a key changed it.
+    fn draw(&mut self) {
+        if !self.dirty || self.reading.is_some() {
+            return;
+        }
+        // The first row is the heading, and it stays put.
+        let page = (self.h as usize).saturating_sub(1).max(1);
+        if self.at < self.top {
+            self.top = self.at;
+        } else if self.at >= self.top + page {
+            self.top = self.at + 1 - page;
+        }
+        let mut text = self.head.clone();
+        for (i, r) in self.rows.iter().enumerate().skip(self.top).take(page) {
+            text.push('\n');
+            if i == self.at {
+                text.push_str(&bar_row(r, self.w as usize, 231, 236));
+            } else {
+                text.push_str(r);
+            }
+        }
+        self.pop.pane.ix = 0;
+        self.pop.pane.set_text(&text);
+        self.pop.pane.refresh();
+        self.dirty = false;
+    }
+
+    /// The whole message under the bar, over the list.
+    fn read(&mut self) {
+        let Some(h) = self.hits.get(self.at) else { return };
+        let tag = self.names.get(&h.id).map(|n| n.0.as_str()).unwrap_or("?");
+        let head = style::styled(
+            &format!(" {} · {} · {} · Enter goes to its session",
+                     tag, local_stamp(h.at), if h.user { "you" } else { "Claude" }),
+            Some(244), None, "");
+        // Wrapped here, so a line that runs on keeps its place: the
+        // pane would start the rest at the border.
+        let width = (self.w as usize).saturating_sub(2);
+        let mut body: Vec<String> = Vec::new();
+        for line in h.text.lines() {
+            let text = line.trim_start();
+            let lead = 1 + (line.len() - text.len()).min(width / 2);
+            let mut rows = hang(text, lead, width.saturating_sub(lead));
+            rows[0].insert_str(0, &" ".repeat(lead));
+            body.extend(rows.iter().map(|r| search::marked(r, &self.words)));
+        }
+        // The size of the list, so nothing of it shows around the
+        // message and nothing of the message is left when it closes.
+        let mut pop = Popup::centered(self.w, self.h, 231, 236);
+        pop.pane.wrap = false;
+        pop.show(&format!("{}\n\n{}", head, body.join("\n")));
+        self.reading = Some(pop);
+    }
+
+    fn key(&mut self, k: &str) -> Step {
+        let Some(path) = self.hits.get(self.at).map(|h| h.path.clone()) else { return Step::Close };
+        if let Some(r) = &mut self.reading {
+            match k {
+                "ENTER" => return Step::Open(path),
+                "ESC" | "q" | "LEFT" | "h" => {
+                    // The message was painted over the list, so the
+                    // list has every row to paint again.
+                    self.reading = None;
+                    self.pop.pane.invalidate();
+                    self.pop.pane.border_refresh();
+                    self.dirty = true;
+                }
+                "UP" | "k" => { r.pane.lineup(); }
+                "DOWN" | "j" => { r.pane.linedown(); }
+                "PgDOWN" | " " => { r.pane.pagedown(); }
+                "PgUP" | "b" => { r.pane.pageup(); }
+                "HOME" | "g" => { r.pane.top(); }
+                "END" | "G" => { r.pane.bottom(); }
+                _ => {}
+            }
+            return Step::Stay;
+        }
+        let last = self.hits.len().saturating_sub(1);
+        let page = (self.h as usize).saturating_sub(1).max(1);
+        let at = self.at;
+        match k {
+            "ESC" | "q" => return Step::Close,
+            "ENTER" => return Step::Open(path),
+            "UP" | "k" => self.at = at.saturating_sub(1),
+            "DOWN" | "j" => self.at = (at + 1).min(last),
+            "PgUP" => self.at = at.saturating_sub(page),
+            "PgDOWN" => self.at = (at + page).min(last),
+            "HOME" | "g" => self.at = 0,
+            "END" | "G" => self.at = last,
+            " " | "RIGHT" | "l" => self.read(),
+            _ => return Step::Stay,
+        }
+        self.dirty = true;
+        Step::Stay
+    }
+}
+
 /// One popup row as the selection bar: the popup's colours swapped and
 /// armed again after every reset inside the row, so a coloured tag keeps
 /// its colour and the bar stays one tone to the right edge.
@@ -1718,6 +1987,7 @@ fn help() -> Over {
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
     t.push_str(&format!("{}open items; Enter jumps to one, d deletes it\n", key("v")));
+    t.push_str(&format!("{}search what every session has said\n", key("/")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
     // As wide as the longest line and as tall as the list, so no line
@@ -1759,8 +2029,8 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · v open · ? help".to_string(),
-            Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · v open · / search · ? help".to_string(),
+            Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · / search · ? help".to_string(),
         }
     };
     let right = version_tag(old);
@@ -1943,5 +2213,44 @@ mod width_tests {
     fn colour_codes_are_not_counted() {
         let painted = style::fg("abc", 208);
         assert_eq!(visible_len(&painted), 3);
+    }
+}
+
+#[cfg(test)]
+mod found_tests {
+    use super::*;
+
+    #[test]
+    fn a_found_row_names_the_session_the_age_and_who() {
+        let hit = |id: &str, at: u64, user: bool, text: &str| search::Hit {
+            path: std::path::PathBuf::from(format!("/t/{}.jsonl", id)),
+            id: id.into(), at, user, text: text.into(),
+        };
+        let hits = [
+            hit("a", 1000, true, "Could we make a game called Kart?"),
+            hit("b", 460, false, &format!("{} the kart game is there {}", "word ".repeat(40), "tail ".repeat(40))),
+            hit("gone", 100, true, "a kart from a session with no name"),
+        ];
+        let mut names = std::collections::HashMap::new();
+        names.insert("a".to_string(), ("funkey".to_string(), true));
+        names.insert("b".to_string(), ("fe2o3".to_string(), false));
+        let rows = found_rows(&hits, &search::words("kart"), &names, 80, 1060);
+        let plain: Vec<String> = rows.iter().map(|r| crust::strip_ansi(r)).collect();
+        assert_eq!(plain[0], " funkey     1m you     Could we make a game called Kart?");
+        assert!(plain[1].starts_with(" fe2o3     10m Claude  …"), "{}", plain[1]);
+        assert!(plain[1].contains("the kart game is there"), "{}", plain[1]);
+        assert!(plain[2].starts_with(" ?         16m you     a kart"), "{}", plain[2]);
+        for (p, r) in plain.iter().zip(&rows) {
+            assert!(visible_len(p) <= 76, "a row fits inside the popup: {}", p);
+            assert!(r.contains(&style::styled("kart", Some(226), None, "b"))
+                    || r.contains(&style::styled("Kart", Some(226), None, "b")), "{:?}", r);
+        }
+    }
+
+    #[test]
+    fn a_time_reads_as_a_date_and_a_clock() {
+        let s = local_stamp(1790848800);
+        assert_eq!(s.len(), 16, "{s}");
+        assert!(s.starts_with("2026-10-01 "), "{s}");
     }
 }

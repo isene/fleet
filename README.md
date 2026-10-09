@@ -107,6 +107,12 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
   The header counts them. Up and Down move the bar, Enter jumps to
   that row's session, and `d` deletes the item under the bar. See
   [Open items](#open-items)
+- `/` search what every session has said: your prompts and Claude's
+  answers, old sessions too. Type one word or several; a message is
+  listed when all of them are in it, in any case. Newest first, at most
+  300. Up and Down move the bar, Space shows the whole message, and
+  Enter goes to its session: it jumps to an open one and resumes a
+  closed one. Tool output is left out
 - `o` / `Enter` on an inbox item: open it. A program that runs in a
   terminal (an editor, a PDF reader) gets a glass of its own
 - `o` / `Enter` on a `msg` row: hand the message to the session it is
@@ -128,9 +134,12 @@ bold blue, ages gray, and context size on the statusline's own scale:
 green under 50 % of the window, yellow under 75 %, red above.
 
 `fleet --list` prints sessions and inbox as plain text; `fleet --today`
-prints the rollup; `fleet --moves` prints your open items. `fleet --wake
-<tag>` types the check-messages prompt into that open session, the same
-as Enter on an inbox row. All four exit immediately.
+prints the rollup; `fleet --moves` prints your open items. `fleet
+--search <words>` prints the 100 newest messages with all the words in
+them.
+
+`fleet --wake <tag>` types the check-messages prompt into that open
+session, the same as Enter on an inbox row. All five exit immediately.
 
 ## Message bus
 
