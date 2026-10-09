@@ -181,7 +181,8 @@ A session opens an item in its answer, in one of two ways:
 
 - a row in a table that has a `Question` column, with the item's number
   in the first column
-- a line that starts with `Your move 7:`
+- a line that reads `7. Your move: ...`, with the item's number in front
+  (`Your move 7: ...` is read too)
 
 It closes items with a line `Closed: 3, 5`. The number of a closed item
 is free again from the next answer on, so the numbers stay small: a new

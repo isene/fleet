@@ -229,15 +229,27 @@ pub fn glob_match(pat: &str, name: &str) -> bool {
     rec(pat.as_bytes(), name.as_bytes())
 }
 
+/// Tests share one process and one $HOME. A test that reads or writes
+/// under it takes this first: it locks the others out and points $HOME at
+/// an empty folder of its own, so no test touches the real one.
+#[cfg(test)]
+pub fn test_home(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("fleet-{}-{}", name, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("HOME", &dir);
+    (guard, dir)
+}
+
 #[cfg(test)]
 mod title_tests {
     use super::*;
 
     #[test]
     fn a_title_with_a_hash_survives_a_write_and_a_load() {
-        let dir = std::env::temp_dir().join(format!("fleet-title-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("HOME", &dir);
+        let (_lock, dir) = test_home("title");
         std::fs::write(dir.join(".fleetrc"), "session rust 3 280800\nparked x\n").unwrap();
         let mut p = Config::load().session_prefs.remove("rust").unwrap();
         p.title = Some("#rust work".into());

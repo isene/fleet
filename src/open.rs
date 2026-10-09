@@ -2,7 +2,7 @@
 //!
 //! A hook (`fleet --hook`) reads every finished answer and keeps one
 //! small file per session, ~/.fleet/open/<session id>. An answer opens an
-//! item with a numbered row of its decisions table or a "Your move 7:"
+//! item with a numbered row of its decisions table or a "7. Your move:"
 //! line, and closes items with a line "Closed: 3, 5". fleet lists the
 //! files, so an item stays until its session closes it or the user
 //! deletes it. A later answer, a new prompt or a restart no longer wipes
@@ -89,7 +89,8 @@ fn subject(text: &str) -> &str {
 /// Read an answer for open items. A decisions table is one with a
 /// "Question" column; its row reads "question → recommendation" and takes
 /// its number from the first column. A move is a line that starts with
-/// "Your move 7:" or "Your move:", as a list item or in bold or bare. A
+/// "7. Your move:" or "Your move:", as a list item or in bold or bare.
+/// "Your move 7:" is the form from before v0.3.49, and is still read. A
 /// mention further into a line is not one, and neither is code.
 fn said(answer: &str) -> Said {
     let mut out = Said::default();
@@ -143,6 +144,11 @@ fn said(answer: &str) -> Said {
             }
             continue;
         }
+        let (front, l) = match l.split_once(". ") {
+            Some((n, rest)) if n.parse::<u32>().is_ok() => (n.parse::<u32>().ok(), rest),
+            _ => (None, l),
+        };
+        let l = l.trim_start_matches(|c: char| c == '*' || c.is_whitespace());
         let Some((num, rest)) = l.strip_prefix("Your move").and_then(|r| r.split_once(':')) else { continue };
         let num = num.trim();
         if !num.is_empty() && num.parse::<u32>().is_err() {
@@ -150,7 +156,7 @@ fn said(answer: &str) -> Said {
         }
         let rest = after(rest);
         if !rest.is_empty() {
-            out.items.push((num.parse().ok(), keep(&rest)));
+            out.items.push((front.or(num.parse().ok()), keep(&rest)));
         }
     }
     out
@@ -345,7 +351,7 @@ pub fn hook(input: &str, now: u64) -> Option<String> {
     let reason = format!(
         "fleet lists what you still ask of the user, and this answer does not fit its list: {}. \
          Each decisions row has a number in its # column, and each action reads \
-         \"Your move N: ...\". A new item takes the lowest number that is not open, \
+         \"N. Your move: ...\". A new item takes the lowest number that is not open, \
          from {} up. Open from before: {}. An open item keeps its number and \
          its question. Close one that is answered, done or dropped with a line \
          \"Closed: N, M\" (numbers only) above the moves. A number closed in this answer \
@@ -381,12 +387,17 @@ mod tests {
         let a = "Done.\n\n- **Your move 4:** ship it?\nYour move: pick a name\n  * Your move:  \n";
         assert_eq!(said(a).items, vec![
             (Some(4), "ship it?".to_string()), (None, "pick a name".to_string())]);
+        // The number in front, where a HyperList view colours it.
+        let a = "5. Your move: run it\n**6. Your move:** look\n- 7. **Your move:** wait\n8. Open the file.\n";
+        assert_eq!(said(a).items, vec![
+            (Some(5), "run it".to_string()), (Some(6), "look".to_string()), (Some(7), "wait".to_string())]);
     }
 
     #[test]
     fn a_mention_is_not_a_move() {
         assert_eq!(said("It lists every \"Your move:\" line."), Said::default());
         assert_eq!(said("Your move lines go last: after the table."), Said::default());
+        assert_eq!(said("3. Your move lines go last: after the table."), Said::default());
         assert_eq!(said("```\nYour move 3: run it\nClosed: 1\n```"), Said::default(), "code");
     }
 
@@ -452,7 +463,8 @@ mod tests {
     #[test]
     fn an_answered_item_is_hidden_until_the_turn_ends() {
         assert_eq!(answers("1 y\n2nd try failed\n3.5 is the size\n  4: the second\n5.\n6\nSee 7"), vec![1, 4, 5, 6]);
-        let id = format!("test-answer-{}", std::process::id());
+        let (_lock, home) = crate::config::test_home("answer");
+        let id = "test-answer".to_string();
         let event = |name: &str, key: &str, text: &str, prompt: &str| serde_json::json!({
             "hook_event_name": name, "session_id": id, "prompt_id": prompt, key: text}).to_string();
         let stop = |text: &str, prompt: &str| hook(&event("Stop", "last_assistant_message", text, prompt), 100);
@@ -474,18 +486,19 @@ mod tests {
         says("3 y", "p4");
         says("And one more thing.", "p5");
         assert_eq!(listed(), vec![1, 3]);
-        forget(&id);
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
     fn a_file_from_an_older_fleet_is_read() {
-        let id = format!("test-old-{}", std::process::id());
+        let (_lock, home) = crate::config::test_home("old");
+        let id = "test-old";
         let _ = std::fs::create_dir_all(dir());
         std::fs::write(file(&id), "5\t4\t7\tp9\n3\t2\t100\told item\n").unwrap();
         let l = Ledger::read(&id);
         assert_eq!((l.turn, l.prompt.as_str(), l.answered.len()), (7, "p9", 0));
         assert_eq!(open(&l), vec![(3, "old item")]);
-        forget(&id);
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
@@ -520,7 +533,8 @@ mod tests {
 
     #[test]
     fn the_hook_sends_a_bare_item_back_once() {
-        let id = format!("test-hook-{}", std::process::id());
+        let (_lock, home) = crate::config::test_home("hook");
+        let id = "test-hook";
         let stop = |answer: &str, again: bool| serde_json::json!({
             "hook_event_name": "Stop", "session_id": id, "prompt_id": "p1",
             "stop_hook_active": again, "last_assistant_message": answer}).to_string();
@@ -539,5 +553,6 @@ mod tests {
         assert_eq!(load(&id, false).len(), 1);
         forget(&id);
         assert!(!file(&id).exists());
+        let _ = std::fs::remove_dir_all(home);
     }
 }
