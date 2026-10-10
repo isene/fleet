@@ -9,6 +9,10 @@ secret URL path) and exposes two tools:
   check_messages()            read and consume messages addressed to the
                               phone
 
+A plain GET of the same address with "?waiting" answers with the number
+of messages that wait for the phone, and consumes nothing. A home-screen
+widget on the phone can show a mark from it.
+
 Transport: ~/fleet-relay/ is a small dedicated Syncthing folder shared
 with the laptop (as ~/.fleet/relay), so a written file lands in seconds.
 The user's other synced folders stay receive-encrypted on this host;
@@ -16,7 +20,7 @@ only bus messages, which pass through this server in plaintext anyway,
 live here unencrypted.
 On the laptop the fleet-bus UserPromptSubmit hook injects it into the
 target session on its next user prompt. Replies travel the same road in
-reverse: sessions write to fleet-bus/phone/, this server serves them.
+reverse: sessions write to the bus folder's phone/, this server serves them.
 
 Security: nothing here executes anything. Messages are plain text files;
 tags are sanitised to [a-z0-9_-]; the only reachable route is behind the
@@ -134,6 +138,15 @@ def check_messages():
     return "Messages from the laptop sessions:\n\n" + "\n---\n".join(out)
 
 
+def waiting():
+    """How many messages wait for the phone. Counts names: no file is
+    opened, and nothing is consumed."""
+    try:
+        return sum(1 for f in (BUS / "phone").iterdir() if f.name.endswith(".msg"))
+    except OSError:
+        return 0
+
+
 def rpc_result(rid, result):
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
@@ -211,7 +224,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, reply)
 
     def do_GET(self):
-        self._send(405, None)            # no SSE stream; JSON responses only
+        # Any other GET is an MCP client asking for an SSE stream, and
+        # there is none: JSON responses only.
+        if self.path.partition("?")[2] != "waiting":
+            self._send(405, None)
+            return
+        data = "{}\n".format(waiting()).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_DELETE(self):
         self._send(200, None)            # session teardown: nothing to tear
