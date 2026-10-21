@@ -69,16 +69,27 @@ fn safe(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect()
 }
 
-/// The first line that names an ETA, as the word itself.
+/// Words that may follow "ETA" when an answer gives one: "ETA about
+/// 14:20", "ETA unknown", "ETA in 5 min". A number counts too.
+const ETA_NEXT: [&str; 7] = ["about", "around", "roughly", "unknown", "in", "under", "by"];
+
+/// The first line that gives an ETA. A line that only names the word, as
+/// the phone's switch "ETA work done", gives none.
 fn eta_line(text: &str) -> Option<String> {
-    text.lines().find(|l| has_word(l, "ETA")).map(|l| cut(&plain(l), 140))
+    text.lines().find(|l| gives_eta(l)).map(|l| cut(&plain(l), 140))
 }
 
-fn has_word(line: &str, word: &str) -> bool {
-    line.match_indices(word).any(|(i, _)| {
-        let before = line[..i].chars().next_back();
-        let after = line[i + word.len()..].chars().next();
-        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+fn gives_eta(line: &str) -> bool {
+    line.match_indices("ETA").any(|(i, _)| {
+        let rest = &line[i + 3..];
+        if line[..i].chars().next_back().is_some_and(char::is_alphanumeric)
+            || rest.starts_with(char::is_alphanumeric)
+        {
+            return false;
+        }
+        let word = rest.trim_start_matches(|c: char| !c.is_alphanumeric())
+            .split(|c: char| !c.is_alphanumeric()).next().unwrap_or("");
+        word.starts_with(|c: char| c.is_ascii_digit()) || ETA_NEXT.contains(&word.to_lowercase().as_str())
     })
 }
 
@@ -146,7 +157,11 @@ mod tests {
     #[test]
     fn eta_is_a_word_of_its_own() {
         assert!(eta_line("Builds now; ETA: 14:20").is_some());
+        assert!(eta_line("- **ETA:** about 20 min").is_some());
+        assert!(eta_line("ETA unknown: the run has no earlier length").is_some());
         assert!(eta_line("The BETA build and the ETAs").is_none());
+        // A false alarm seen on 2026-10-21: the name of the phone's switch.
+        assert!(eta_line("Two switches, \"ETA work done\" and \"Every finished turn\".").is_none());
         assert_eq!(cut("abcdef", 4), "abc…");
     }
 }
