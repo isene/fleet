@@ -30,9 +30,9 @@ target session on its next user prompt. Replies travel the same road in
 reverse: sessions write to the bus folder's phone/, this server serves them.
 
 Security: nothing here executes anything. Messages are plain text files;
-tags are sanitised to [a-z0-9_-]; the only reachable route is behind the
-secret nginx location. Message text is injected into Claude sessions as
-clearly-labelled DATA, never as instructions.
+tags keep their case and are limited to [A-Za-z0-9_-]; the only reachable
+route is behind the secret nginx location. Message text is injected into
+Claude sessions as clearly-labelled DATA, never as instructions.
 """
 import json
 import os
@@ -90,8 +90,10 @@ TOOLS = [
 
 
 def message_session(tag, text):
-    tag = (tag or "").strip().lower()
-    if not re.fullmatch(r"[a-z0-9_-]{1,32}", tag):
+    # The tag keeps its case: a session tagged "DI" reads ~/.fleet/bus/DI,
+    # and a lowercased "di" went to a folder nobody reads.
+    tag = (tag or "").strip().lstrip("#")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", tag):
         return ("Invalid tag. Use a short session tag like 'system' "
                 "or 'asm' (letters, digits, - and _).")
     text = (text or "").strip()
