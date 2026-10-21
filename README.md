@@ -222,8 +222,9 @@ each. A prompt or an answer that changes nothing touches no file.
 ### Finished turns, on the phone
 
 With a relay folder (`~/.fleet/relay`, a Syncthing folder shared with the
-host that runs `server/fleet-mcp.py`), the same hook writes `done-<tag>.json` there at the end of every answer: the
-session's tag, the time, the answer's first line, and its kind.
+host that runs `server/fleet-mcp.py`), the same hook writes
+`done-<tag>.json` there at the end of every answer: the session's tag,
+the time, the answer's first line, and its kind.
 
 - An answer with the word "ETA" in it means work goes on after it. The
   first later answer with no ETA and no "still running" ends that work,
