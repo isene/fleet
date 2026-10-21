@@ -13,6 +13,13 @@ A plain GET of the same address with "?waiting" answers with the number
 of messages that wait for the phone, and consumes nothing. A home-screen
 widget on the phone can show a mark from it.
 
+A GET with "?done=SINCE&wait=SECS" answers with the turns the sessions
+finished after SINCE (a unix time): {"events": [{"tag", "t", "kind",
+"eta", "line"}]}. The laptop's fleet hook writes one done-<tag>.json per
+session into the relay. With none newer, the answer waits up to SECS
+(80 at most, under nginx's 90 s proxy_read_timeout) for one to arrive,
+so the phone's fleet app hears of a finished turn within seconds.
+
 Transport: ~/fleet-relay/ is a small dedicated Syncthing folder shared
 with the laptop (as ~/.fleet/relay), so a written file lands in seconds.
 The user's other synced folders stay receive-encrypted on this host;
@@ -30,6 +37,7 @@ clearly-labelled DATA, never as instructions.
 import json
 import os
 import re
+import urllib.parse
 import urllib.request
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +46,7 @@ from pathlib import Path
 BUS = Path.home() / "fleet-relay"
 BIND = ("127.0.0.1", 8765)
 MAX_TEXT = 4000
+DONE_WAIT_MAX = 80
 PROTOCOL = "2025-03-26"
 
 TOOLS = [
@@ -147,6 +156,40 @@ def waiting():
         return 0
 
 
+def done_events(since):
+    out = []
+    for f in BUS.glob("done-*.json"):
+        try:
+            e = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(e, dict) and isinstance(e.get("t"), int) and e["t"] > since:
+            out.append(e)
+    return sorted(out, key=lambda e: e["t"])
+
+
+def done(since, wait):
+    """The turns finished after `since`, waiting up to `wait` seconds for
+    one. Syncthing renames each file into place, which changes the
+    folder's time, so a waiting request reads the files only after that
+    changed: one stat every two seconds meanwhile."""
+    end = time.time() + min(max(wait, 0), DONE_WAIT_MAX)
+    seen = None
+    while True:
+        try:
+            stamp = BUS.stat().st_mtime_ns
+        except OSError:
+            stamp = 0
+        if stamp != seen:
+            seen = stamp
+            events = done_events(since)
+            if events:
+                return events
+        if time.time() >= end:
+            return []
+        time.sleep(2)
+
+
 def rpc_result(rid, result):
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
@@ -226,7 +269,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # Any other GET is an MCP client asking for an SSE stream, and
         # there is none: JSON responses only.
-        if self.path.partition("?")[2] != "waiting":
+        query = self.path.partition("?")[2]
+        if query.startswith("done="):
+            q = urllib.parse.parse_qs(query)
+            try:
+                since = int(q["done"][0])
+                wait = int(q.get("wait", ["0"])[0])
+            except (KeyError, ValueError):
+                self._send(400, None)
+                return
+            self._send(200, {"events": done(since, wait)})
+            return
+        if query != "waiting":
             self._send(405, None)
             return
         data = "{}\n".format(waiting()).encode()

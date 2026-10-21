@@ -219,6 +219,23 @@ and tell your sessions the two forms above, in `CLAUDE.md` or an output
 style. The hook runs once per prompt and once per answer, in about 2 ms
 each. A prompt or an answer that changes nothing touches no file.
 
+### Finished turns, on the phone
+
+With a relay folder (`~/.fleet/relay`, a Syncthing folder shared with the
+host that runs `server/fleet-mcp.py`), the same hook writes `done-<tag>.json` there at the end of every answer: the
+session's tag, the time, the answer's first line, and its kind.
+
+- An answer with the word "ETA" in it means work goes on after it. The
+  first later answer with no ETA and no "still running" ends that work,
+  and goes out as kind `eta` with the ETA it had.
+- Every other answer goes out as kind `turn`.
+
+`server/fleet-mcp.py` serves them: a GET with `?done=SINCE&wait=SECS`
+answers with the turns finished after SINCE, waiting up to 80 seconds
+for one. The phone's fleet app in [nomad](https://github.com/isene/nomad)
+asks it and rings for every turn, or only for ended ETA work. The hook
+writes nothing without a relay folder.
+
 ## Configuration
 
 `~/.fleetrc`, plain text, `#` comments. Any `inbox` line replaces the

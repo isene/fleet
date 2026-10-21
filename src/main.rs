@@ -12,6 +12,7 @@
 //! instead of 170. No daemons, nothing runs after q.
 
 mod config;
+mod done;
 mod inbox;
 mod open;
 mod rollup;
@@ -142,6 +143,11 @@ fn main() {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+            if v["hook_event_name"] == "Stop" {
+                done::note(&v, now);
+            }
+        }
         if let Some(out) = open::hook(&input, now) {
             println!("{}", out);
         }
