@@ -44,8 +44,13 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     let mut eta = String::new();
     if let Some(line) = eta_line(text) {
         if std::fs::read_to_string(&mark).ok().as_deref() != Some(line.as_str()) {
+            // A rename, since fleet reads the marks again only when the
+            // folder's mtime moves, and a write in place leaves it alone.
+            let tmp = home.join(".fleet/eta").join(format!(".{}.tmp", id));
             let _ = std::fs::create_dir_all(home.join(".fleet/eta"));
-            let _ = std::fs::write(&mark, &line);
+            if std::fs::write(&tmp, &line).is_ok() {
+                let _ = std::fs::rename(&tmp, &mark);
+            }
         }
     } else if !running(text) {
         if let Ok(old) = std::fs::read_to_string(&mark) {
@@ -107,6 +112,7 @@ const FINISH: [&str; 8] = ["ends", "end", "finishes", "finish", "done", "ready",
 /// the word, as the phone's switch "ETA work done" or a quoted "ETA about
 /// HH:MM", gives none, and so does "started about 12:00".
 fn eta_clock(line: &str) -> Option<String> {
+    let line = unquoted(line);
     let w: Vec<&str> = line.split(|c: char| !(c.is_alphanumeric() || c == ':'))
         .map(|t| t.trim_matches(':')).filter(|t| !t.is_empty()).collect();
     let is_clock = |t: &str| t.split_once(':').is_some_and(|(h, m)| {
@@ -133,6 +139,21 @@ fn eta_clock(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The line with its quotes cut out: a session that quotes another
+/// session's "ETA about 13:27" gives no ETA of its own.
+fn unquoted(line: &str) -> String {
+    let mut open = None;
+    line.chars().filter(|&c| {
+        let close = match c { '“' => Some('”'), '"' | '`' => Some(c), _ => None };
+        match open {
+            Some(end) if c == end => { open = None; false }
+            Some(_) => false,
+            None if close.is_some() => { open = close; false }
+            None => true,
+        }
+    }).collect()
 }
 
 fn running(text: &str) -> bool {
@@ -198,6 +219,24 @@ mod tests {
     }
 
     #[test]
+    fn a_new_eta_moves_the_folder_mtime() {
+        // Seen on 2026-10-22: ci moved its ETA from 13:16 to 13:27, and
+        // fleet went on showing 13:16, since its cache waits for the folder.
+        let home = std::env::temp_dir().join(format!("fleet-done-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let say = |text: &str| note_in(&home, &json!({"session_id": "s", "last_assistant_message": text}), 1, "ci");
+        say("ETA about 13:16");
+        let dir = home.join(".fleet/eta");
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        std::fs::File::open(&dir).unwrap().set_modified(old).unwrap();
+        say("ETA about 13:27");
+        assert_ne!(std::fs::metadata(&dir).unwrap().modified().unwrap(), old);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp file left");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn the_newest_eta_in_a_text() {
         assert_eq!(eta_in("Tests pass, ETA about 11:28.\nThe docs next, ETA about 12:31.").as_deref(), Some("12:31"));
         assert_eq!(eta_in("Now three more checks."), None);
@@ -213,6 +252,10 @@ mod tests {
         assert_eq!(c("The faults are planted one at a time; it all ends about 13:05.").as_deref(), Some("13:05"));
         assert_eq!(c("The build should be done by 10:25.").as_deref(), Some("10:25"));
         assert_eq!(c("The run started about 12:00."), None);
+        // Seen on 2026-10-22: one session quoting another's ETA got that ETA.
+        assert_eq!(c("ci's own answer says \"ETA about 13:27\", while fleet shows 13:16"), None);
+        assert_eq!(c("It said “ETA about 13:27” and `ends about 13:30`."), None);
+        assert_eq!(c("He asked \"why\"; ETA about 14:20.").as_deref(), Some("14:20"));
     }
 
     #[test]
