@@ -85,60 +85,69 @@ pub fn eta(id: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The clock time of the newest ETA in a text, for a session still at
-/// work: most ETAs are said mid-turn ("while the scenarios run, ETA about
-/// 12:31"), and the hook sees only the turn's last answer.
+/// The latest ETA in a text, for a session still at work: most ETAs are
+/// said mid-turn ("while the scenarios run, ETA about 12:31"), and the hook
+/// sees only the turn's last answer.
 pub fn eta_in(text: &str) -> Option<String> {
-    text.lines().rev().find_map(eta_clock)
+    text.lines().filter_map(eta_clock).max_by_key(|c| minutes(c))
 }
 
 fn safe(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect()
 }
 
-/// The first line that gives an ETA, kept whole so its clock time stays.
+/// The line that gives the latest ETA, kept whole so its clock time stays.
 fn eta_line(text: &str) -> Option<String> {
-    text.lines().find(|l| eta_clock(l).is_some()).map(plain)
+    text.lines().filter_map(|l| eta_clock(l).map(|c| (minutes(&c), l)))
+        .max_by_key(|(m, _)| *m).map(|(_, l)| plain(l))
 }
 
-/// Verbs that give a finish time with a clock time after them: sessions
-/// write "it all ends about 13:05" as often as "ETA about 13:05".
+/// Verbs that give a finish time with "at" and a clock time: "done at 14:20".
 const FINISH: [&str; 8] = ["ends", "end", "finishes", "finish", "done", "ready", "completes", "lands"];
 
-/// The time a line gives for work to end: a clock time or "unknown"
-/// after the word ETA ("ETA about 14:20", "**ETA:** 9:05", "ETA unknown"
-/// gives "?"), or a clock time after a finish verb and "about", "by",
-/// "around", "before" or "at" ("ends about 13:05"). A line that only names
-/// the word, as the phone's switch "ETA work done" or a quoted "ETA about
-/// HH:MM", gives none, and so does "started about 12:00".
+/// Words that make the clock time after them a start, as in "started about 12:00".
+const START: [&str; 6] = ["started", "start", "began", "begun", "since", "from"];
+
+/// The latest time a line gives for work to end, read as the style hook
+/// reads it: a clock time after "ETA", "about", "around", "by", "before",
+/// "until" or "~" ("ETA 9:05", "finish at about 15:02"), or after a finish
+/// verb and "at" ("done at 14:20"). "ETA unknown" gives "?". A line that only
+/// names the word, as the phone's switch "ETA work done", gives none, and so
+/// do a quoted "ETA about 13:27" and "started about 12:00".
 fn eta_clock(line: &str) -> Option<String> {
-    let line = unquoted(line);
+    let line = unquoted(line).replace('~', " about ");
     let w: Vec<&str> = line.split(|c: char| !(c.is_alphanumeric() || c == ':'))
         .map(|t| t.trim_matches(':')).filter(|t| !t.is_empty()).collect();
     let is_clock = |t: &str| t.split_once(':').is_some_and(|(h, m)| {
         (1..=2).contains(&h.len()) && m.len() == 2 && h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit())
     });
     let at = |i: usize| w.get(i).copied().unwrap_or("");
+    let mut best: Option<&str> = None;
+    let mut unknown = false;
     for i in 0..w.len() {
-        let next = at(i + 1).to_lowercase();
-        if w[i] == "ETA" {
-            if next == "unknown" {
-                return Some("?".into());
+        let low = w[i].to_lowercase();
+        let clock = if w[i] == "ETA" {
+            unknown |= at(i + 1).eq_ignore_ascii_case("unknown");
+            Some(at(i + 1))
+        } else if matches!(low.as_str(), "about" | "around" | "roughly" | "by" | "before" | "until" | "till") {
+            (!START.contains(&at(i.wrapping_sub(1)).to_lowercase().as_str())).then(|| at(i + 1))
+        } else if FINISH.contains(&low.as_str()) && at(i + 1).eq_ignore_ascii_case("at") {
+            Some(at(i + 2))
+        } else {
+            None
+        };
+        if let Some(c) = clock.filter(|c| is_clock(c)) {
+            if best.is_none_or(|b| minutes(c) >= minutes(b)) {
+                best = Some(c);
             }
-            if is_clock(at(i + 1)) {
-                return Some(at(i + 1).into());
-            }
-            if matches!(next.as_str(), "about" | "around" | "roughly") && is_clock(at(i + 2)) {
-                return Some(at(i + 2).into());
-            }
-        } else if FINISH.contains(&w[i].to_lowercase().as_str())
-            && matches!(next.as_str(), "about" | "around" | "by" | "before" | "at")
-            && is_clock(at(i + 2))
-        {
-            return Some(at(i + 2).into());
         }
     }
-    None
+    best.map(String::from).or(unknown.then(|| "?".into()))
+}
+
+/// Minutes since midnight of "14:20"; "?" counts as 0.
+fn minutes(clock: &str) -> u32 {
+    clock.split_once(':').and_then(|(h, m)| Some(h.parse::<u32>().ok()? * 60 + m.parse::<u32>().ok()?)).unwrap_or(0)
 }
 
 /// The line with its quotes cut out: a session that quotes another
@@ -237,9 +246,11 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_eta_in_a_text() {
+    fn the_latest_eta_in_a_text() {
         assert_eq!(eta_in("Tests pass, ETA about 11:28.\nThe docs next, ETA about 12:31.").as_deref(), Some("12:31"));
         assert_eq!(eta_in("Now three more checks."), None);
+        assert_eq!(eta_in("Scores at about 15:20.\nci's runs arrive at about 15:05.").as_deref(), Some("15:20"));
+        assert_eq!(eta_line("Runs end about 15:02.\nScores follow about 15:20.").as_deref(), Some("Scores follow about 15:20."));
     }
 
     #[test]
@@ -252,6 +263,10 @@ mod tests {
         assert_eq!(c("The faults are planted one at a time; it all ends about 13:05.").as_deref(), Some("13:05"));
         assert_eq!(c("The build should be done by 10:25.").as_deref(), Some("10:25"));
         assert_eq!(c("The run started about 12:00."), None);
+        // As DI wrote it on 2026-10-22: "at about", and two times in one line.
+        assert_eq!(c("All five columns finish at about 15:02, and the scores follow at about 15:20.").as_deref(), Some("15:20"));
+        assert_eq!(c("Done at 14:20, ~14:35 at the latest.").as_deref(), Some("14:35"));
+        assert_eq!(c("gpt-6.1-sol finished at 14:44, so my 16:00 guess was too late."), None);
         // Seen on 2026-10-22: one session quoting another's ETA got that ETA.
         assert_eq!(c("ci's own answer says \"ETA about 13:27\", while fleet shows 13:16"), None);
         assert_eq!(c("It said “ETA about 13:27” and `ends about 13:30`."), None);

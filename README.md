@@ -49,9 +49,9 @@ that at a glance, in one TUI.
   `CAPPED` (a usage limit refused the model; needs `/model` or credits),
   `idle`, `off` (no process)
 - ETA: the clock time the session gave for work still running, `?` for
-  "ETA unknown". While a turn runs it is the newest one said in that
-  turn; after it, the one its last answer gave. It turns red once that
-  time has passed
+  "ETA unknown". While a turn runs it is the latest one said in that
+  turn; after it, the latest one its last answer gave. It turns red once
+  that time has passed
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt
 - Sorted so CAPPED and YOURS float to the top
@@ -231,10 +231,10 @@ host that runs `server/fleet-mcp.py`), the same hook writes
 the time, the answer's first line, and its kind.
 
 - An answer that gives an ETA ("ETA about 14:20", "ETA unknown", or a
-  clock time after a finish word, as in "ends about 14:20") means work
-  goes on after it. The first later answer with no ETA and
-  no "still running" ends that work, and goes out as kind `eta` with
-  the ETA it had.
+  clock time after "about", "by" or "until", as in "finish at about
+  14:20") means work goes on after it. The first later answer with no
+  ETA and no "still running" ends that work, and goes out as kind `eta`
+  with the ETA it had.
 - Every other answer goes out as kind `turn`.
 
 `server/fleet-mcp.py` serves them: a GET with `?done=SINCE&wait=SECS`
