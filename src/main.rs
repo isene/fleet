@@ -1094,10 +1094,11 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
                  auto: &std::collections::HashSet<String>) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
     let take = (h as usize).saturating_sub(1).min(sess.len());
-    let tag_w = sess.iter().take(take).map(|s| visible_len(&s.tag)).max().unwrap_or(0).clamp(7, TAG_W);
+    // Two spare cells keep the tags clear of the state.
+    let tag_w = sess.iter().take(take).map(|s| visible_len(&s.tag)).max().unwrap_or(0).clamp(7, TAG_W) + 2;
     let hdr = format!(
-        " {:<w$}  {:<7}  {:>5}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
-        "SESSION", "STATE", "ETA", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT", w = tag_w
+        " {:<w$}  {:<7}  {:>6}  {:>2}  {:>5}  {:>5}  {:<9}  {}",
+        "SESSION", "STATE", "AGE", "WS", "ETA", "CTX", "MODEL", "LAST PROMPT", w = tag_w
     );
     let mut out = header_bar(&hdr, cols);
     // An ETA already past shows red: the work ran late, or its session
@@ -1113,7 +1114,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
         let line = format!(
-            " {} {}{}  {}  {}  {:>2}  {}  {}  {}",
+            " {} {}{}  {}  {:>2}  {}  {}  {}  {}",
             // Bookmarked tags magenta like the statusline; unbookmarked
             // sessions show their directory name in light gray.
             style::fg(&clip(&s.tag, tag_w), if s.tagged { 13 } else { 250 }),
@@ -1122,9 +1123,9 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
             style::styled(&format!("{:<7}", s.state.label()),
                           Some(state_color(s.state)), None,
                           if s.state == State::Yours { "b" } else { "" }),
-            style::fg(&format!("{:>5}", s.eta), if late { 203 } else { 220 }),
             style::fg(&format!("{:>6}", fmt_age(s.age_secs)), 242),
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
+            style::fg(&format!("{:>5}", s.eta), if late { 203 } else { 220 }),
             style::fg(&format!("{:>5}", ctx),
                       s.ctx_k.map(|k| ctx_color(k, window_k)).unwrap_or(242)),
             style::styled(&format!("{:<9}", clip(&s.model, 9)), Some(33), None, "b"),
