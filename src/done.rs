@@ -51,7 +51,7 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
         if let Ok(old) = std::fs::read_to_string(&mark) {
             let _ = std::fs::remove_file(&mark);
             kind = "eta";
-            eta = old;
+            eta = cut(&old, 140);
         }
     }
     let relay = home.join(".fleet/relay");
@@ -75,50 +75,64 @@ pub fn eta_dir() -> PathBuf {
 /// The clock time of a session's open ETA, as "14:20", or "?" when it
 /// gives none ("ETA unknown"). Empty when the session has no open ETA.
 pub fn eta(id: &str) -> String {
-    std::fs::read_to_string(eta_dir().join(safe(id))).map(|l| clock(&l)).unwrap_or_default()
+    std::fs::read_to_string(eta_dir().join(safe(id)))
+        .map(|l| eta_clock(&l).unwrap_or_else(|| "?".into()))
+        .unwrap_or_default()
 }
 
-/// The first "14:20" or "9:05" after the word ETA, else "?".
-fn clock(line: &str) -> String {
-    let rest = line.find("ETA").map_or(line, |i| &line[i + 3..]);
-    let b = rest.as_bytes();
-    let digit = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
-    (1..b.len())
-        .find(|&i| b[i] == b':' && digit(i - 1) && digit(i + 1) && digit(i + 2) && !digit(i + 3))
-        .map(|i| rest[if i >= 2 && digit(i - 2) { i - 2 } else { i - 1 }..i + 3].to_string())
-        .unwrap_or_else(|| "?".into())
+/// The clock time of the newest ETA in a text, for a session still at
+/// work: most ETAs are said mid-turn ("while the scenarios run, ETA about
+/// 12:31"), and the hook sees only the turn's last answer.
+pub fn eta_in(text: &str) -> Option<String> {
+    text.lines().rev().find_map(eta_clock)
 }
 
 fn safe(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect()
 }
 
-/// The first line that gives an ETA: a clock time or "unknown" after the
-/// word, as the style rule asks ("ETA about 14:20"). A line that only
-/// names the word, as the phone's switch "ETA work done" or a quoted
-/// "ETA about HH:MM", gives none.
+/// The first line that gives an ETA, kept whole so its clock time stays.
 fn eta_line(text: &str) -> Option<String> {
-    text.lines().find(|l| gives_eta(l)).map(|l| cut(&plain(l), 140))
+    text.lines().find(|l| eta_clock(l).is_some()).map(plain)
 }
 
-fn gives_eta(line: &str) -> bool {
-    line.match_indices("ETA").any(|(i, _)| {
-        let rest = &line[i + 3..];
-        if line[..i].chars().next_back().is_some_and(char::is_alphanumeric)
-            || rest.starts_with(char::is_alphanumeric)
+/// Verbs that give a finish time with a clock time after them: sessions
+/// write "it all ends about 13:05" as often as "ETA about 13:05".
+const FINISH: [&str; 8] = ["ends", "end", "finishes", "finish", "done", "ready", "completes", "lands"];
+
+/// The time a line gives for work to end: a clock time or "unknown"
+/// after the word ETA ("ETA about 14:20", "**ETA:** 9:05", "ETA unknown"
+/// gives "?"), or a clock time after a finish verb and "about", "by",
+/// "around", "before" or "at" ("ends about 13:05"). A line that only names
+/// the word, as the phone's switch "ETA work done" or a quoted "ETA about
+/// HH:MM", gives none, and so does "started about 12:00".
+fn eta_clock(line: &str) -> Option<String> {
+    let w: Vec<&str> = line.split(|c: char| !(c.is_alphanumeric() || c == ':'))
+        .map(|t| t.trim_matches(':')).filter(|t| !t.is_empty()).collect();
+    let is_clock = |t: &str| t.split_once(':').is_some_and(|(h, m)| {
+        (1..=2).contains(&h.len()) && m.len() == 2 && h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit())
+    });
+    let at = |i: usize| w.get(i).copied().unwrap_or("");
+    for i in 0..w.len() {
+        let next = at(i + 1).to_lowercase();
+        if w[i] == "ETA" {
+            if next == "unknown" {
+                return Some("?".into());
+            }
+            if is_clock(at(i + 1)) {
+                return Some(at(i + 1).into());
+            }
+            if matches!(next.as_str(), "about" | "around" | "roughly") && is_clock(at(i + 2)) {
+                return Some(at(i + 2).into());
+            }
+        } else if FINISH.contains(&w[i].to_lowercase().as_str())
+            && matches!(next.as_str(), "about" | "around" | "by" | "before" | "at")
+            && is_clock(at(i + 2))
         {
-            return false;
+            return Some(at(i + 2).into());
         }
-        let rest = rest.trim_start_matches(|c: char| !c.is_alphanumeric());
-        let word = rest.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_lowercase();
-        let rest = match word.as_str() {
-            "unknown" => return true,
-            "about" | "around" | "roughly" => rest[word.len()..].trim_start_matches(|c: char| !c.is_alphanumeric()),
-            _ => rest,
-        };
-        let hm = rest.split_once(':').map(|(h, m)| (h, m.get(..2).unwrap_or("")));
-        hm.is_some_and(|(h, m)| (1..=2).contains(&h.len()) && h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit()) && m.len() == 2)
-    })
+    }
+    None
 }
 
 fn running(text: &str) -> bool {
@@ -179,15 +193,26 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         note_in(&home, &json!({"session_id": "s", "last_assistant_message": "ETA about 14:20"}), 1, "ci");
         assert!(!home.join(".fleet/relay").exists());
-        assert_eq!(clock(&std::fs::read_to_string(home.join(".fleet/eta/s")).unwrap()), "14:20");
+        assert_eq!(eta_clock(&std::fs::read_to_string(home.join(".fleet/eta/s")).unwrap()).as_deref(), Some("14:20"));
         let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
-    fn the_clock_after_the_word_eta() {
-        assert_eq!(clock("ETA about 14:20, from the last run."), "14:20");
-        assert_eq!(clock("At 10:00 it began; **ETA:** 9:05"), "9:05");
-        assert_eq!(clock("ETA unknown: this is its first run."), "?");
+    fn the_newest_eta_in_a_text() {
+        assert_eq!(eta_in("Tests pass, ETA about 11:28.\nThe docs next, ETA about 12:31.").as_deref(), Some("12:31"));
+        assert_eq!(eta_in("Now three more checks."), None);
+    }
+
+    #[test]
+    fn the_clock_a_line_gives() {
+        let c = |l: &str| eta_clock(l);
+        assert_eq!(c("ETA about 14:20, from the last run.").as_deref(), Some("14:20"));
+        assert_eq!(c("At 10:00 it began; **ETA:** 9:05").as_deref(), Some("9:05"));
+        assert_eq!(c("ETA unknown: this is its first run.").as_deref(), Some("?"));
+        // As sessions wrote it on 2026-10-22, with no word ETA.
+        assert_eq!(c("The faults are planted one at a time; it all ends about 13:05.").as_deref(), Some("13:05"));
+        assert_eq!(c("The build should be done by 10:25.").as_deref(), Some("10:25"));
+        assert_eq!(c("The run started about 12:00."), None);
     }
 
     #[test]

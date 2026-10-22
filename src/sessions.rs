@@ -89,6 +89,8 @@ struct TailInfo {
     prompt: String,
     cwd: String,
     ctx_k: Option<u64>,
+    /// The newest ETA said in the current turn, as "12:31".
+    eta: String,
 }
 
 pub struct Cache {
@@ -254,6 +256,15 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             } else {
                 state
             };
+            // While the turn runs, the newest ETA said in it; once the
+            // turn has ended, the one its last answer gave, from the hook.
+            let at_prompt = info.last == 'a' && !info.turn_open;
+            let eta = if !at_prompt && matches!(state, State::Working | State::Yours)
+                && !info.eta.is_empty() {
+                info.eta.clone()
+            } else {
+                eta
+            };
             out.push(Session {
                 id,
                 tag,
@@ -351,6 +362,15 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                     info.capped = txt.contains("usage credits")
                         || txt.contains("usage limit")
                         || txt.contains("limit reached");
+                }
+            }
+            // Still inside the current turn: the prompt is not reached.
+            if info.prompt.is_empty() && info.eta.is_empty() {
+                if let Some(e) = msg["content"].as_array().and_then(|a| a.iter().rev()
+                    .filter_map(|b| b["text"].as_str())
+                    .find_map(crate::done::eta_in))
+                {
+                    info.eta = e;
                 }
             }
             if info.model.is_empty() {
