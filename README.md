@@ -244,8 +244,9 @@ asks it and rings for every turn, or only for ended ETA work. The hook
 writes nothing without a relay folder.
 
 fleet itself writes `sessions.json` to the relay folder: the session
-list as its screen shows it, with each session's open items. It writes
-when a state, ETA, prompt, workspace, model or open item changes; age
+list as its screen shows it, with each session's open items and » mark.
+It writes when a state, ETA, prompt, workspace, model, open item or »
+mark changes; age
 and context size alone write nothing. A GET with
 `?sessions=STAMP&wait=SECS` answers with the list once the file's time
 differs from STAMP. The phone app shows it while its screen is open, and

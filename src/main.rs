@@ -320,7 +320,7 @@ fn main() {
     let mut old = false;
     // The session list as last sent to the phone, so an unchanged one is
     // not written again.
-    let mut published = String::new();
+    let mut published = 0;
     // The popup that is open, if one is. The tick goes on under it.
     let mut over: Option<Over> = None;
 
@@ -351,7 +351,7 @@ fn main() {
                 config::write_parked(&cfg.parked);
             }
         }
-        done::publish(&sess, now_secs(), &mut published);
+        done::publish(&sess, &cfg.autowake, now_secs(), &mut published);
         let items = inbox::scan(&cfg);
         let pdir = config::home().join(".fleet/relay/phone");
         let names: Vec<String> = std::fs::read_dir(&pdir)
