@@ -318,6 +318,9 @@ fn main() {
     let mut auto_times: std::collections::HashMap<String, Vec<std::time::Instant>> = std::collections::HashMap::new();
     // Set once a newer build has replaced the file this fleet runs from.
     let mut old = false;
+    // The session list as last sent to the phone, so an unchanged one is
+    // not written again.
+    let mut published = String::new();
     // The popup that is open, if one is. The tick goes on under it.
     let mut over: Option<Over> = None;
 
@@ -348,6 +351,7 @@ fn main() {
                 config::write_parked(&cfg.parked);
             }
         }
+        done::publish(&sess, now_secs(), &mut published);
         let items = inbox::scan(&cfg);
         let pdir = config::home().join(".fleet/relay/phone");
         let names: Vec<String> = std::fs::read_dir(&pdir)

@@ -73,6 +73,45 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     }
 }
 
+/// The session list for the phone's fleet app: what fleet's own screen
+/// shows, in ~/.fleet/relay/sessions.json. fleet writes it when a state,
+/// ETA, prompt, workspace, model or open item changes. Age and context
+/// size ride along but write nothing alone, or a working session would
+/// send a file every tick. Between writes it costs one string compare.
+pub fn publish(sess: &[crate::sessions::Session], now: u64, last: &mut String) {
+    publish_in(&crate::config::home(), sess, now, last);
+}
+
+fn publish_in(home: &Path, sess: &[crate::sessions::Session], now: u64, last: &mut String) {
+    let rows = |full: bool| -> Value {
+        sess.iter().map(|s| {
+            let moves: Vec<Value> = s.moves.iter()
+                .map(|m| json!({"num": m.num, "text": cut(&m.text, 300)}))
+                .collect();
+            let mut r = json!({"tag": s.tag, "state": s.state.label(), "eta": s.eta, "ws": s.ws,
+                               "model": s.model, "prompt": cut(&s.prompt, 200), "moves": moves});
+            if full {
+                r["at"] = json!(now.saturating_sub(s.age_secs));
+                r["ctx"] = json!(s.ctx_k);
+            }
+            r
+        }).collect()
+    };
+    let key = rows(false).to_string();
+    if key == *last {
+        return;
+    }
+    *last = key;
+    let relay = home.join(".fleet/relay");
+    if !relay.is_dir() {
+        return;
+    }
+    let tmp = relay.join(".sessions.tmp");
+    if std::fs::write(&tmp, json!({"t": now, "sessions": rows(true)}).to_string() + "\n").is_ok() {
+        let _ = std::fs::rename(&tmp, relay.join("sessions.json"));
+    }
+}
+
 pub fn eta_dir() -> PathBuf {
     crate::config::home().join(".fleet/eta")
 }
@@ -213,6 +252,37 @@ mod tests {
         assert_eq!(e["t"], 3);
         // The work ended once; the next answer is a plain turn again.
         assert_eq!(stop(&home, "Done.", 4)["kind"], "turn");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_session_list_is_written_when_a_state_changes_and_not_for_age() {
+        let home = std::env::temp_dir().join(format!("fleet-view-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
+        let file = home.join(".fleet/relay/sessions.json");
+        let one = |state, age_secs| crate::sessions::Session {
+            id: "s".into(), tag: "ci".into(), cwd: String::new(), path: PathBuf::new(),
+            state, tagged: true, age_secs, model: "opus".into(), prompt: "Run the suite".into(),
+            pid: None, ws: Some(3), ctx_k: Some(120), at_prompt: false,
+            moves: vec![crate::open::Open { num: 2, at: 0, text: "Restart kastrup?".into() }],
+            eta: "14:20".into(),
+        };
+        let mut last = String::new();
+        publish_in(&home, &[one(crate::sessions::State::Working, 5)], 100, &mut last);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let s = &v["sessions"][0];
+        assert_eq!((s["tag"].as_str(), s["state"].as_str(), s["eta"].as_str()), (Some("ci"), Some("working"), Some("14:20")));
+        assert_eq!((s["ws"].as_u64(), s["at"].as_u64(), s["ctx"].as_u64()), (Some(3), Some(95), Some(120)));
+        assert_eq!(s["moves"][0]["num"], 2);
+        // An older age alone writes nothing.
+        std::fs::remove_file(&file).unwrap();
+        publish_in(&home, &[one(crate::sessions::State::Working, 50)], 145, &mut last);
+        assert!(!file.exists());
+        // The answer is in: written again.
+        publish_in(&home, &[one(crate::sessions::State::Yours, 0)], 150, &mut last);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!((v["t"].as_u64(), v["sessions"][0]["state"].as_str()), (Some(150), Some("YOURS")));
         let _ = std::fs::remove_dir_all(&home);
     }
 

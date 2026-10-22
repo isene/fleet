@@ -20,6 +20,13 @@ session into the relay. With none newer, the answer waits up to SECS
 (80 at most, under nginx's 90 s proxy_read_timeout) for one to arrive,
 so the phone's fleet app hears of a finished turn within seconds.
 
+A GET with "?sessions=STAMP&wait=SECS" answers with the laptop fleet's
+session list, as fleet wrote it to sessions.json: {"stamp", "t",
+"sessions": [...]}. STAMP is the file time of the list the phone has
+(-1 for none). While the file is unchanged the answer waits up to SECS,
+then says {"stamp": STAMP} alone. The phone asks only while its screen
+shows the list.
+
 Transport: ~/fleet-relay/ is a small dedicated Syncthing folder shared
 with the laptop (as ~/.fleet/relay), so a written file lands in seconds.
 The user's other synced folders stay receive-encrypted on this host;
@@ -192,6 +199,28 @@ def done(since, wait):
         time.sleep(2)
 
 
+def sessions(stamp, wait):
+    """The laptop's session list once its file time differs from `stamp`,
+    waiting up to `wait` seconds for that: one stat every two seconds."""
+    f = BUS / "sessions.json"
+    end = time.time() + min(max(wait, 0), DONE_WAIT_MAX)
+    while True:
+        try:
+            now = f.stat().st_mtime_ns
+        except OSError:
+            now = 0
+        if now != stamp:
+            try:
+                view = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                view = {"t": 0, "sessions": []}
+            view["stamp"] = now
+            return view
+        if time.time() >= end:
+            return {"stamp": stamp}
+        time.sleep(2)
+
+
 def rpc_result(rid, result):
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
@@ -281,6 +310,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, None)
                 return
             self._send(200, {"events": done(since, wait)})
+            return
+        if query.startswith("sessions="):
+            q = urllib.parse.parse_qs(query)
+            try:
+                stamp = int(q["sessions"][0])
+                wait = int(q.get("wait", ["0"])[0])
+            except (KeyError, ValueError):
+                self._send(400, None)
+                return
+            self._send(200, sessions(stamp, wait))
             return
         if query != "waiting":
             self._send(405, None)
