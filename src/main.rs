@@ -32,8 +32,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// mail on the next user prompt, so a message only ever gets read when
 /// someone types into that session.
 const WAKE_PROMPT: &str = "Check fleet messages";
-/// Width of the SESSION column. Ten cut names like "corporate-int…"
-/// and left the tag unreadable, which is the one thing a row is for.
+/// Widest the SESSION column gets. It is as wide as the longest tag
+/// shown; ten cut names like "corporate-int…" and left the tag
+/// unreadable, which is the one thing a row is for.
 const TAG_W: usize = 18;
 /// Selection bar, darker than the rows it sits under, and the header bar,
 /// light with black text the way pointer's top row reads.
@@ -1092,27 +1093,36 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
                  sel: usize, marked: &[std::path::PathBuf], window_k: u64,
                  auto: &std::collections::HashSet<String>) {
     let mut pane = Pane::new(1, y, cols, h, 231, 0);
+    let take = (h as usize).saturating_sub(1).min(sess.len());
+    let tag_w = sess.iter().take(take).map(|s| visible_len(&s.tag)).max().unwrap_or(0).clamp(7, TAG_W);
     let hdr = format!(
-        " {:<w$}  {:<7}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
-        "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT", w = TAG_W
+        " {:<w$}  {:<7}  {:>5}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
+        "SESSION", "STATE", "ETA", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT", w = tag_w
     );
     let mut out = header_bar(&hdr, cols);
-    let take = (h as usize).saturating_sub(1).min(sess.len());
+    // An ETA already past shows red: the work ran late, or its session
+    // never said it ended.
+    let now = local_stamp(now_secs());
+    let mins = |hm: &str| hm.split_once(':')
+        .and_then(|(h, m)| Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?));
+    let now_m = mins(&now[11..]).unwrap_or(0);
     for (i, s) in sess.iter().take(take).enumerate() {
-        let width = (cols as usize).saturating_sub(43 + TAG_W);
+        let width = (cols as usize).saturating_sub(50 + tag_w);
+        let late = mins(&s.eta).is_some_and(|m| (1..720).contains(&(now_m - m).rem_euclid(1440)));
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
         let line = format!(
-            " {} {}{}  {}  {:>2}  {}  {}  {}",
+            " {} {}{}  {}  {}  {:>2}  {}  {}  {}",
             // Bookmarked tags magenta like the statusline; unbookmarked
             // sessions show their directory name in light gray.
-            style::fg(&clip(&s.tag, TAG_W), if s.tagged { 13 } else { 250 }),
+            style::fg(&clip(&s.tag, tag_w), if s.tagged { 13 } else { 250 }),
             // » marks a session fleet wakes by itself (the `a` key).
             if auto.contains(&s.tag) { style::fg("»", 208) } else { " ".into() },
             style::styled(&format!("{:<7}", s.state.label()),
                           Some(state_color(s.state)), None,
                           if s.state == State::Yours { "b" } else { "" }),
+            style::fg(&format!("{:>5}", s.eta), if late { 203 } else { 220 }),
             style::fg(&format!("{:>6}", fmt_age(s.age_secs)), 242),
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
             style::fg(&format!("{:>5}", ctx),
@@ -2177,6 +2187,7 @@ mod width_tests {
             moves: items.iter()
                 .map(|(n, t)| open::Open { num: *n, at: now_secs(), text: t.to_string() })
                 .collect(),
+            eta: String::new(),
         }
     }
 

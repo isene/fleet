@@ -73,6 +73,8 @@ pub struct Session {
     /// What the session still waits for the user to do or decide: its
     /// open items, each with its number. Kept by `open`, not read here.
     pub moves: Vec<crate::open::Open>,
+    /// The clock time of its open ETA ("14:20", "?"), empty for none.
+    pub eta: String,
 }
 
 #[derive(Clone, Default)]
@@ -100,6 +102,9 @@ pub struct Cache {
     /// folder that holds them changed: one stat per pass, no reads.
     open: HashMap<String, Vec<crate::open::Open>>,
     open_at: SystemTime,
+    /// Each listed session's open ETA, the same way: one stat per pass.
+    eta: HashMap<String, String>,
+    eta_at: SystemTime,
     /// List the items the user has answered too, as `--moves` does.
     pub answered: bool,
 }
@@ -112,6 +117,8 @@ impl Cache {
             procs_at: SystemTime::UNIX_EPOCH,
             open: HashMap::new(),
             open_at: SystemTime::UNIX_EPOCH,
+            eta: HashMap::new(),
+            eta_at: SystemTime::UNIX_EPOCH,
             answered: false,
         }
     }
@@ -148,6 +155,13 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
     if open_at != cache.open_at {
         cache.open.clear();
         cache.open_at = open_at;
+    }
+    let eta_at = std::fs::metadata(crate::done::eta_dir())
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    if eta_at != cache.eta_at {
+        cache.eta.clear();
+        cache.eta_at = eta_at;
     }
     let mut out = Vec::new();
     let projects = home().join(".claude/projects");
@@ -219,6 +233,9 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             let moves = cache.open.entry(id.clone())
                 .or_insert_with(|| crate::open::load(&id, answered))
                 .clone();
+            let eta = cache.eta.entry(id.clone())
+                .or_insert_with(|| crate::done::eta(&id))
+                .clone();
             let tagged = tags.contains_key(&id);
             let tag = tags.get(&id).cloned().unwrap_or_else(|| {
                 Path::new(&info.cwd)
@@ -252,6 +269,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 ctx_k: info.ctx_k,
                 at_prompt: info.last == 'a' && !info.turn_open,
                 moves,
+                eta,
             });
         }
     }
@@ -443,6 +461,7 @@ pub fn stray(path: &Path, tags: &HashMap<String, String>) -> Option<Session> {
         ctx_k: info.ctx_k,
         at_prompt: false,
         moves: Vec::new(),
+        eta: String::new(),
     })
 }
 
