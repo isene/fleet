@@ -406,13 +406,18 @@ fn main() {
         // have the keyboard (you may be typing there), each message wakes
         // once, and a session gets at most 4 wakes in 30 minutes, so two
         // sessions cannot answer each other without end.
+        //
+        // A message from the phone wakes its session, marked or not, since
+        // you wrote it away from the laptop: it skips the window check and
+        // the 4 in 30 minutes, which stop sessions, not you.
         auto_woken.retain(|p| logs.iter().any(|e| e.path.as_deref() == Some(p.as_path())));
-        if wake.is_none() && !cfg.autowake.is_empty() {
+        if wake.is_none() {
             let now_i = std::time::Instant::now();
             let half_hour = std::time::Duration::from_secs(1800);
             for e in &logs {
                 let Some(path) = &e.path else { continue };
-                if !cfg.autowake.contains(&e.dest) || auto_woken.contains(path) {
+                let phone = inbox::from_phone(path);
+                if !(phone || cfg.autowake.contains(&e.dest)) || auto_woken.contains(path) {
                     continue;
                 }
                 let Some(s) = sess.iter().find(|s| s.tag == e.dest) else { continue };
@@ -421,17 +426,19 @@ fn main() {
                     continue;
                 }
                 let Some(xid) = sessions::window_ancestor(pid, &c.pid_windows()) else { continue };
-                if c.active_window() == Some(xid) {
+                if !phone && c.active_window() == Some(xid) {
                     continue;   // you are in that window; try again next tick
                 }
                 let times = auto_times.entry(e.dest.clone()).or_default();
                 times.retain(|t| now_i.duration_since(*t) < half_hour);
-                if times.len() >= 4 {
+                if !phone && times.len() >= 4 {
                     flash = format!("{} auto-wake paused: 4 in 30 min", e.dest);
                     auto_woken.insert(path.clone());
                     continue;
                 }
-                times.push(now_i);
+                if !phone {
+                    times.push(now_i);
+                }
                 auto_woken.insert(path.clone());
                 wake = Some((e.dest.clone(), now_i, now_i + std::time::Duration::from_secs(30)));
                 break;

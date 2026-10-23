@@ -4,7 +4,7 @@
 //! directories are skipped so a `*` glob on a busy folder stays sane.
 
 use crate::config::{glob_match, Config};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub struct Item {
@@ -57,6 +57,11 @@ fn parse_sender(raw: &str) -> Option<String> {
 /// Messages sitting in the bus and relay mailboxes, not yet delivered.
 /// Newest first. These rows live in the INBOX pane; delivered traffic
 /// lives in the log popup.
+/// A message the phone sent: the fleet server names it <time>-phone.msg.
+pub fn from_phone(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("-phone.msg"))
+}
+
 pub fn pending() -> Vec<LogEntry> {
     let now = SystemTime::now();
     let mut out = Vec::new();
@@ -176,4 +181,13 @@ pub fn scan(cfg: &Config) -> Vec<Item> {
     }
     out.sort_by_key(|i| i.age_secs);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_phone_message_is_known_by_its_name() {
+        assert!(super::from_phone(std::path::Path::new("/r/ci/1761270000-phone.msg")));
+        assert!(!super::from_phone(std::path::Path::new("/b/ci/1761270000-fe2o3")));
+    }
 }

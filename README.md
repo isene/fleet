@@ -25,10 +25,12 @@ once, and you steer less of it by hand.
 What keeps you in charge:
 
 - every message shows in the INBOX pane, and `M` lists them all
-- auto-wake is set per session with `a`, at most 4 times in 30 minutes
+- auto-wake is set per session with `a`, at most 4 times in 30 minutes;
+  a message from your phone wakes its session without it
 - a session gets its messages once per turn, so two sessions cannot keep
   answering each other
-- fleet never types into the window you are working in
+- fleet never types into the window you are working in, unless the
+  message came from your phone, since then you are away from it
 
 Set it up under [Message bus](#message-bus).
 
@@ -228,7 +230,11 @@ each. A prompt or an answer that changes nothing touches no file.
 With a relay folder (`~/.fleet/relay`, a Syncthing folder shared with the
 host that runs `server/fleet-mcp.py`), the same hook writes
 `done-<tag>.json` there at the end of every answer: the session's tag,
-the time, the answer's first line, and its kind.
+the time, the answer's first line, and its kind. Beside it goes
+`answer-<tag>.txt`, the whole answer: HyperList as your screen shows it,
+colours included, when the
+[hyperlist-display](https://github.com/isene/hyperlist-display) hook is
+at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
 
 - An answer that gives an ETA ("ETA about 14:20", "ETA unknown", or a
   clock time after "about", "by" or "until", as in "finish at about
@@ -249,8 +255,12 @@ It writes when a state, ETA, prompt, workspace, model, open item or »
 mark changes; age
 and context size alone write nothing. A GET with
 `?sessions=STAMP&wait=SECS` answers with the list once the file's time
-differs from STAMP. The phone app shows it while its screen is open, and
-a long press on a session sends that session a message.
+differs from STAMP, or a new answer came. Each session in it carries
+`answer`, the start of its last answer without colours. A GET with
+`?answer=TAG` answers with the whole answer. The phone app shows the
+list while its screen is open; a tap on a session shows its answer,
+with a Yes and a No for each open item, and a long press sends that
+session a message.
 
 The phone app's open `?done=` request can also carry `&phone=N`, the
 number of messages for the phone it knows of. The server then answers

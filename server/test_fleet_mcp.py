@@ -43,3 +43,17 @@ def test_a_message_for_the_phone_ends_the_wait(tmp_path, monkeypatch):
     for f in box.iterdir():
         f.unlink()
     assert (fm.waiting(), fm.newest_line()) == (0, "")
+
+
+def test_a_new_answer_changes_the_list_and_comes_in_full(tmp_path, monkeypatch):
+    monkeypatch.setattr(fm, "BUS", tmp_path)
+    (tmp_path / "sessions.json").write_text('{"t": 5, "sessions": [{"tag": "ci"}, {"tag": "../x"}]}')
+    view = fm.sessions(-1, 0)
+    assert [s["answer"] for s in view["sessions"]] == ["", ""]
+    (tmp_path / "answer-ci.txt").write_text("Done\x1b[38;5;46m;\x1b[39m two wait.\n    child\n")
+    again = fm.sessions(view["stamp"], 0)
+    assert again["stamp"] != view["stamp"]
+    assert again["sessions"][0]["answer"] == "Done; two wait.\n    child"
+    full = fm.answer("ci")
+    assert full["text"].startswith("Done\x1b[38;5;46m;") and full["t"] > 0
+    assert fm.answer("../x") is None and fm.answer("DI") is None

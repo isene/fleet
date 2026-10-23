@@ -29,15 +29,20 @@ session list, as fleet wrote it to sessions.json: {"stamp", "t",
 "sessions": [...]}. STAMP is the file time of the list the phone has
 (-1 for none). While the file is unchanged the answer waits up to SECS,
 then says {"stamp": STAMP} alone. The phone asks only while its screen
-shows the list.
+shows the list. Each session in it carries "answer", the start of its
+last answer without colours, and a new answer counts as a change.
+
+A GET with "?answer=TAG" answers with that session's last answer in
+full, as the laptop's fleet hook wrote it to answer-<tag>.txt: HyperList
+with its terminal colours. {"tag", "t", "text"}, or 404 when none is kept.
 
 Transport: ~/fleet-relay/ is a small dedicated Syncthing folder shared
 with the laptop (as ~/.fleet/relay), so a written file lands in seconds.
 The user's other synced folders stay receive-encrypted on this host;
 only bus messages, which pass through this server in plaintext anyway,
-live here unencrypted.
-On the laptop the fleet-bus UserPromptSubmit hook injects it into the
-target session on its next user prompt. Replies travel the same road in
+and each session's last answer live here unencrypted.
+On the laptop fleet wakes the target session for a message from here,
+and the fleet-bus hook injects it on that session's next prompt. Replies travel the same road in
 reverse: sessions write to the bus folder's phone/, this server serves them.
 
 Security: nothing here executes anything. Messages are plain text files;
@@ -58,6 +63,9 @@ BUS = Path.home() / "fleet-relay"
 BIND = ("127.0.0.1", 8765)
 MAX_TEXT = 4000
 DONE_WAIT_MAX = 80
+TAG = re.compile(r"[A-Za-z0-9_-]{1,32}")
+SGR = re.compile(r"\x1b\[[0-9;]*m")
+SNIPPET = 400
 PROTOCOL = "2025-03-26"
 
 TOOLS = [
@@ -65,9 +73,9 @@ TOOLS = [
         "name": "message_session",
         "description": (
             "Send a short message to one of the user's Claude Code sessions "
-            "on his laptop. The message is delivered as context on that "
-            "session's next user prompt (minutes to hours; it never "
-            "interrupts a running turn). Use the session's tag: system, "
+            "on his laptop. fleet wakes that session with it once the "
+            "session waits at its prompt; a running turn reads it when the "
+            "turn ends. Use the session's tag: system, "
             "asm, pf, pip, nomad, freewill, trade and similar. Use "
             "tag 'system' when unsure; that session routes things onward."
         ),
@@ -104,7 +112,7 @@ def message_session(tag, text):
     # The tag keeps its case: a session tagged "DI" reads ~/.fleet/bus/DI,
     # and a lowercased "di" went to a folder nobody reads.
     tag = (tag or "").strip().lstrip("#")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", tag):
+    if not TAG.fullmatch(tag):
         return ("Invalid tag. Use a short session tag like 'system' "
                 "or 'asm' (letters, digits, - and _).")
     text = (text or "").strip()
@@ -117,8 +125,8 @@ def message_session(tag, text):
     path = d / "{}-phone.msg".format(int(time.time()))
     path.write_text(text + "\n\n/phone\n", encoding="utf-8")
     poke_syncthing()
-    return ("Delivered to '{}'. It syncs to the laptop in seconds and "
-            "reaches that session on its next user prompt.".format(tag))
+    return ("Delivered to '{}'. It syncs to the laptop in seconds, and "
+            "fleet wakes that session with it.".format(tag))
 
 
 def poke_syncthing():
@@ -223,26 +231,63 @@ def done(since, wait, phone=None):
         time.sleep(2)
 
 
+def answer_file(tag):
+    return BUS / "answer-{}.txt".format(tag)
+
+
+def list_stamp():
+    """The newest of the list and the answers beside it: a change in
+    either changes what the phone's list shows."""
+    return max([mtime(BUS / "sessions.json")] + [mtime(p) for p in BUS.glob("answer-*.txt")])
+
+
+def snippet(tag):
+    """The start of a session's last answer, without its colours."""
+    if not TAG.fullmatch(tag or ""):
+        return ""
+    try:
+        text = answer_file(tag).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return SGR.sub("", text)[:SNIPPET].strip()
+
+
 def sessions(stamp, wait):
-    """The laptop's session list once its file time differs from `stamp`,
-    waiting up to `wait` seconds for that: one stat every two seconds."""
+    """The laptop's session list, each with the start of its last answer,
+    once the list or an answer changed after `stamp`, waiting up to `wait`
+    seconds for that. Syncthing renames each file into place, so one stat
+    of the folder every two seconds tells when to look again."""
     f = BUS / "sessions.json"
     end = time.time() + min(max(wait, 0), DONE_WAIT_MAX)
+    seen = None
     while True:
-        try:
-            now = f.stat().st_mtime_ns
-        except OSError:
-            now = 0
-        if now != stamp:
-            try:
-                view = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                view = {"t": 0, "sessions": []}
-            view["stamp"] = now
-            return view
+        folder = mtime(BUS)
+        if folder != seen:
+            seen = folder
+            now = list_stamp()
+            if now != stamp:
+                try:
+                    view = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    view = {"t": 0, "sessions": []}
+                for one in view.get("sessions", []):
+                    one["answer"] = snippet(one.get("tag"))
+                view["stamp"] = now
+                return view
         if time.time() >= end:
             return {"stamp": stamp}
         time.sleep(2)
+
+
+def answer(tag):
+    """A session's last answer in full, as the laptop shows it, or None."""
+    if not TAG.fullmatch(tag or ""):
+        return None
+    f = answer_file(tag)
+    try:
+        return {"tag": tag, "t": int(f.stat().st_mtime), "text": f.read_text(encoding="utf-8")}
+    except OSError:
+        return None
 
 
 def rpc_result(rid, result):
@@ -349,6 +394,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, None)
                 return
             self._send(200, sessions(stamp, wait))
+            return
+        if query.startswith("answer="):
+            tag = urllib.parse.parse_qs(query).get("answer", [""])[0]
+            view = answer(tag)
+            self._send(200 if view else 404, view)
             return
         if query != "waiting":
             self._send(405, None)

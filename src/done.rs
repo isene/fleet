@@ -14,8 +14,11 @@
 //! fleet's ETA column shows the clock time of each session's open ETA,
 //! read from ~/.fleet/eta.
 //!
-//! Battery: one small file write per finished answer, never on a timer,
-//! and no event without a relay folder. The file lies beside the tag
+//! The whole answer goes beside it, as answer-<tag>.txt, for the phone's
+//! answer screen: HyperList as the laptop shows it, colours included.
+//!
+//! Battery: two small file writes per finished answer, never on a timer,
+//! and no event without a relay folder. The files lie beside the tag
 //! folders, not in one, so the fleet-bus Stop hook's `relay/*/*` loop
 //! never sees it.
 
@@ -72,6 +75,42 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     if std::fs::write(&tmp, event.to_string() + "\n").is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
+    // The whole answer, for the phone's answer screen: the newest only.
+    let path = relay.join(format!("answer-{}.txt", tag));
+    let tmp = relay.join(format!(".answer-{}.tmp", tag));
+    if std::fs::write(&tmp, cut(&hyperlist(home, text), 60_000)).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// The answer as the laptop's screen shows it: HyperList, coloured, from
+/// the display hook, when it is installed and not switched off. Otherwise
+/// the markdown as Claude wrote it. One run of a 50 KB static program per
+/// finished answer, about 1 ms, and only with a relay folder.
+fn hyperlist(home: &Path, text: &str) -> String {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let conv = home.join(".claude/hooks/hyperlist-display-asm");
+    if !conv.is_file() {
+        return text.to_string();
+    }
+    // A state folder of its own: the live hook keeps one for the answer
+    // that streams now. HL_WIDTH this wide means no line is wrapped, so
+    // the phone wraps for its own screen.
+    let state = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".fleet")).join("fleet-hl");
+    let run = || -> Option<String> {
+        std::fs::create_dir_all(&state).ok()?;
+        let mut c = Command::new(&conv).env("XDG_RUNTIME_DIR", &state).env("HL_WIDTH", "9999")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+        let input = json!({"delta": text, "index": 0, "final": true}).to_string();
+        c.stdin.take()?.write_all(input.as_bytes()).ok()?;
+        let out = c.wait_with_output().ok()?;
+        let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+        let s = v["hookSpecificOutput"]["displayContent"].as_str()?;
+        (!s.trim().is_empty()).then(|| s.to_string())
+    };
+    run().unwrap_or_else(|| text.to_string())
 }
 
 /// The session list for the phone's fleet app: what fleet's own screen
@@ -301,6 +340,18 @@ mod tests {
         publish_in(&home, &[one(crate::sessions::State::Yours, 0)], &HashSet::new(), 160, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!((v["t"].as_u64(), v["sessions"][0]["auto"].as_bool()), (Some(160), Some(false)));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_whole_answer_goes_beside_the_event() {
+        let home = std::env::temp_dir().join(format!("fleet-answer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
+        let text = "Done.\n\n- one\n- two";
+        stop(&home, text, 1);
+        // No display hook in this home: the markdown as written.
+        assert_eq!(std::fs::read_to_string(home.join(".fleet/relay/answer-ci.txt")).unwrap(), text);
         let _ = std::fs::remove_dir_all(&home);
     }
 
