@@ -57,3 +57,25 @@ def test_a_new_answer_changes_the_list_and_comes_in_full(tmp_path, monkeypatch):
     full = fm.answer("ci")
     assert full["text"].startswith("Done\x1b[38;5;46m;") and full["t"] > 0
     assert fm.answer("../x") is None and fm.answer("DI") is None
+
+
+def test_the_answer_comes_over_http(tmp_path, monkeypatch):
+    # 0.3.62 shipped with do_GET's own `answer` variable hiding the
+    # answer() function: every ?answer= request got an empty reply.
+    import json, threading, urllib.request, urllib.error
+    monkeypatch.setattr(fm, "BUS", tmp_path)
+    (tmp_path / "answer-ci.txt").write_text("Done.\n")
+    server = fm.ThreadingHTTPServer(("127.0.0.1", 0), fm.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:{}/".format(server.server_address[1])
+    try:
+        got = json.load(urllib.request.urlopen(base + "?answer=ci"))
+        assert (got["tag"], got["text"]) == ("ci", "Done.\n")
+        try:
+            urllib.request.urlopen(base + "?answer=DI")
+            assert False, "no answer kept: 404"
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+        assert json.load(urllib.request.urlopen(base + "?done=0&wait=0&phone=0"))["waiting"] == 0
+    finally:
+        server.shutdown()

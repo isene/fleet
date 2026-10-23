@@ -379,11 +379,11 @@ class Handler(BaseHTTPRequestHandler):
             except (KeyError, ValueError):
                 self._send(400, None)
                 return
-            answer = {"events": done(since, wait, phone)}
+            reply = {"events": done(since, wait, phone)}
             if phone is not None:
-                answer["waiting"] = waiting()
-                answer["line"] = newest_line() if answer["waiting"] else ""
-            self._send(200, answer)
+                reply["waiting"] = waiting()
+                reply["line"] = newest_line() if reply["waiting"] else ""
+            self._send(200, reply)
             return
         if query.startswith("sessions="):
             q = urllib.parse.parse_qs(query)
