@@ -252,6 +252,12 @@ and context size alone write nothing. A GET with
 differs from STAMP. The phone app shows it while its screen is open, and
 a long press on a session sends that session a message.
 
+The phone app's open `?done=` request can also carry `&phone=N`, the
+number of messages for the phone it knows of. The server then answers
+early when that number changes, with the number and the newest
+message's first line, so a red notice on the phone comes and goes with
+the messages at no extra request.
+
 ## Configuration
 
 `~/.fleetrc`, plain text, `#` comments. Any `inbox` line replaces the

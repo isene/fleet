@@ -19,6 +19,10 @@ finished after SINCE (a unix time): {"events": [{"tag", "t", "kind",
 session into the relay. With none newer, the answer waits up to SECS
 (80 at most, under nginx's 90 s proxy_read_timeout) for one to arrive,
 so the phone's fleet app hears of a finished turn within seconds.
+With "&phone=N", N being the number of messages the phone knows wait
+for it, a different number ends the wait too, and the answer adds
+"waiting" (that number now) and "line" (the newest message's first
+line), so the phone's notice comes and goes with the messages.
 
 A GET with "?sessions=STAMP&wait=SECS" answers with the laptop fleet's
 session list, as fleet wrote it to sessions.json: {"stamp", "t",
@@ -177,22 +181,42 @@ def done_events(since):
     return sorted(out, key=lambda e: e["t"])
 
 
-def done(since, wait):
+def newest_line():
+    """The first line of the newest message for the phone, for its notice.
+    Empty when none waits."""
+    try:
+        msgs = [f for f in (BUS / "phone").iterdir() if f.name.endswith(".msg")]
+        newest = max(msgs, key=lambda f: f.stat().st_mtime_ns)
+        for line in newest.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                return line.strip()[:200]
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
+def mtime(path):
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def done(since, wait, phone=None):
     """The turns finished after `since`, waiting up to `wait` seconds for
     one. Syncthing renames each file into place, which changes the
     folder's time, so a waiting request reads the files only after that
-    changed: one stat every two seconds meanwhile."""
+    changed: one stat every two seconds meanwhile, two with `phone`. Then
+    a count of the messages for the phone that differs from `phone` ends
+    the wait too."""
     end = time.time() + min(max(wait, 0), DONE_WAIT_MAX)
     seen = None
     while True:
-        try:
-            stamp = BUS.stat().st_mtime_ns
-        except OSError:
-            stamp = 0
+        stamp = (mtime(BUS), mtime(BUS / "phone") if phone is not None else 0)
         if stamp != seen:
             seen = stamp
             events = done_events(since)
-            if events:
+            if events or (phone is not None and waiting() != phone):
                 return events
         if time.time() >= end:
             return []
@@ -306,10 +330,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 since = int(q["done"][0])
                 wait = int(q.get("wait", ["0"])[0])
+                phone = int(q["phone"][0]) if "phone" in q else None
             except (KeyError, ValueError):
                 self._send(400, None)
                 return
-            self._send(200, {"events": done(since, wait)})
+            answer = {"events": done(since, wait, phone)}
+            if phone is not None:
+                answer["waiting"] = waiting()
+                answer["line"] = newest_line() if answer["waiting"] else ""
+            self._send(200, answer)
             return
         if query.startswith("sessions="):
             q = urllib.parse.parse_qs(query)

@@ -25,3 +25,21 @@ def test_the_session_list_comes_when_it_changed(tmp_path, monkeypatch):
     assert view["sessions"][0]["tag"] == "ci" and view["stamp"] > 0
     # Unchanged: the stamp alone, after the wait.
     assert fm.sessions(view["stamp"], 0) == {"stamp": view["stamp"]}
+
+
+def test_a_message_for_the_phone_ends_the_wait(tmp_path, monkeypatch):
+    import os, time
+    monkeypatch.setattr(fm, "BUS", tmp_path)
+    box = tmp_path / "phone"
+    box.mkdir()
+    (box / "1-ci.msg").write_text("Old one.\n")
+    (box / "2-DI.msg").write_text("\nTests pass.\n\n-- DI\n")
+    os.utime(box / "1-ci.msg", (1, 1))
+    # The phone knows of none: two wait, so the 5 s wait ends at once.
+    start = time.time()
+    assert fm.done(0, 5, 0) == [] and time.time() - start < 1
+    assert (fm.waiting(), fm.newest_line()) == (2, "Tests pass.")
+    # Read in the Claude app: the count is the one the phone knows.
+    for f in box.iterdir():
+        f.unlink()
+    assert (fm.waiting(), fm.newest_line()) == (0, "")
