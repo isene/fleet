@@ -75,6 +75,9 @@ pub struct Session {
     pub moves: Vec<crate::open::Open>,
     /// The clock time of its open ETA ("14:20", "?"), empty for none.
     pub eta: String,
+    /// The permission dialog it waits on, as the hook marked it: the call
+    /// asked about (empty when more than one waits) and what it runs.
+    pub ask: Option<(String, String)>,
 }
 
 #[derive(Clone, Default)]
@@ -91,6 +94,8 @@ struct TailInfo {
     ctx_k: Option<u64>,
     /// The newest ETA said in the current turn, as "12:31".
     eta: String,
+    /// The id of the newest tool call, when `last` is 't'.
+    call: String,
 }
 
 pub struct Cache {
@@ -107,6 +112,9 @@ pub struct Cache {
     /// Each listed session's open ETA, the same way: one stat per pass.
     eta: HashMap<String, String>,
     eta_at: SystemTime,
+    /// Each session's waiting dialog, the same way.
+    ask: HashMap<String, Option<(String, String)>>,
+    ask_at: SystemTime,
     /// List the items the user has answered too, as `--moves` does.
     pub answered: bool,
 }
@@ -121,6 +129,8 @@ impl Cache {
             open_at: SystemTime::UNIX_EPOCH,
             eta: HashMap::new(),
             eta_at: SystemTime::UNIX_EPOCH,
+            ask: HashMap::new(),
+            ask_at: SystemTime::UNIX_EPOCH,
             answered: false,
         }
     }
@@ -164,6 +174,13 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
     if eta_at != cache.eta_at {
         cache.eta.clear();
         cache.eta_at = eta_at;
+    }
+    let ask_at = std::fs::metadata(crate::done::ask_dir())
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    if ask_at != cache.ask_at {
+        cache.ask.clear();
+        cache.ask_at = ask_at;
     }
     let mut out = Vec::new();
     let projects = home().join(".claude/projects");
@@ -265,6 +282,13 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             } else {
                 eta
             };
+            // The hook's mark, while the session still stops at that call.
+            let ask = if state == State::Yours && info.last == 't' {
+                cache.ask.entry(id.clone()).or_insert_with(|| crate::done::ask_mark(&id)).clone()
+                    .filter(|(c, _)| c.is_empty() || *c == info.call)
+            } else {
+                None
+            };
             out.push(Session {
                 id,
                 tag,
@@ -281,6 +305,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 at_prompt: info.last == 'a' && !info.turn_open,
                 moves,
                 eta,
+                ask,
             });
         }
     }
@@ -341,6 +366,12 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                     .map(|a| a.iter().any(|b| b["type"] == "tool_use"))
                     .unwrap_or(false);
                 info.last = if tools { 't' } else { 'a' };
+                if let Some(id) = msg["content"].as_array()
+                    .and_then(|a| a.iter().rev().find(|b| b["type"] == "tool_use"))
+                    .and_then(|b| b["id"].as_str())
+                {
+                    info.call = id.to_string();
+                }
                 // Claude writes a text or thinking block of its own
                 // before the tool call it leads to, each as its own
                 // line. Both carry stop_reason "tool_use": the turn
@@ -482,6 +513,7 @@ pub fn stray(path: &Path, tags: &HashMap<String, String>) -> Option<Session> {
         at_prompt: false,
         moves: Vec::new(),
         eta: String::new(),
+        ask: None,
     })
 }
 

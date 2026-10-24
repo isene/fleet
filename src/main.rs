@@ -2201,7 +2201,7 @@ mod width_tests {
             moves: items.iter()
                 .map(|(n, t)| open::Open { num: *n, at: now_secs(), text: t.to_string() })
                 .collect(),
-            eta: String::new(),
+            eta: String::new(), ask: None,
         }
     }
 

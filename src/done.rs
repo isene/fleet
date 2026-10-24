@@ -19,7 +19,9 @@
 //!
 //! A permission dialog that stays up a few seconds fires Claude Code's
 //! Notification hook. It goes out as kind "ask", with the tool and what it
-//! wants to run, so the phone rings for a session that waits on you.
+//! wants to run, so the phone rings for a session that waits on you. The
+//! hook also marks it in ~/.fleet/ask/<session id>, which the session list
+//! carries to the phone, where Allow and Deny answer it.
 //!
 //! Battery: two small file writes per finished answer, never on a timer,
 //! and no event without a relay folder. The files lie beside the tag
@@ -73,6 +75,8 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     }
     let tag = tag_of(tags, &id);
     put(&relay, &tag, kind, &eta, &first_line(text), now);
+    // The turn has ended, so no dialog of it waits.
+    let _ = std::fs::remove_file(home.join(".fleet/ask").join(&id));
     // The whole answer, for the phone's answer screen: the newest only.
     let path = relay.join(format!("answer-{}.txt", tag));
     let tmp = relay.join(format!(".answer-{}.tmp", tag));
@@ -88,38 +92,88 @@ pub fn ask(v: &Value, now: u64) {
 
 fn ask_in(home: &Path, v: &Value, now: u64, tags: &str) {
     let Some(id) = v["session_id"].as_str() else { return };
+    let id = safe(id);
     let relay = home.join(".fleet/relay");
     if !relay.is_dir() {
         return;
     }
-    let line = v["transcript_path"].as_str()
-        .and_then(|p| asking(Path::new(p)))
-        .unwrap_or_else(|| plain(v["message"].as_str().unwrap_or("Waits for your yes")));
-    put(&relay, &tag_of(tags, &safe(id)), "ask", "", &cut(&line, 200), now);
+    let calls = v["transcript_path"].as_str().map(|p| pending(Path::new(p))).unwrap_or_default();
+    // One call waits: the phone may answer it. With more, or none found,
+    // it only rings, and the dialog is answered on the laptop.
+    let call = if calls.len() == 1 { calls[0].0.clone() } else { String::new() };
+    let line = match calls.first() {
+        Some((_, l)) if calls.len() > 1 => format!("{} and {} more", l, calls.len() - 1),
+        Some((_, l)) => l.clone(),
+        None => plain(v["message"].as_str().unwrap_or("Waits for your yes")),
+    };
+    let line = cut(&line, 200);
+    // The mark the session list reads, until the turn ends.
+    let dir = home.join(".fleet/ask");
+    let tmp = dir.join(format!(".{}.tmp", id));
+    let _ = std::fs::create_dir_all(&dir);
+    if std::fs::write(&tmp, format!("{}\t{}\n", call, line)).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join(&id));
+    }
+    put(&relay, &tag_of(tags, &id), "ask", "", &line, now);
 }
 
-/// The tool call a permission dialog asks about, from the transcript's
-/// last 64 KB: "Bash: git push", "Edit: src/main.rs".
-fn asking(transcript: &Path) -> Option<String> {
+pub fn ask_dir() -> PathBuf {
+    crate::config::home().join(".fleet/ask")
+}
+
+/// A session's waiting dialog, as the hook marked it: the call it asks
+/// about (empty when more than one waits) and what that call runs.
+pub fn ask_mark(id: &str) -> Option<(String, String)> {
+    let t = std::fs::read_to_string(ask_dir().join(safe(id))).ok()?;
+    let (call, line) = t.trim_end().split_once('\t')?;
+    Some((call.to_string(), line.to_string()))
+}
+
+/// The tool calls still waiting for a result, oldest first, each with
+/// what it runs ("Bash: git push", "Edit: src/main.rs"), from the
+/// transcript's last 64 KB. A prompt of the user's starts a new turn.
+pub fn pending(transcript: &Path) -> Vec<(String, String)> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(transcript).ok()?;
-    let len = f.metadata().ok()?.len();
-    f.seek(SeekFrom::Start(len.saturating_sub(65_536))).ok()?;
+    let mut out: Vec<(String, String)> = Vec::new();
+    let Ok(mut f) = std::fs::File::open(transcript) else { return out };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
-    let tail = String::from_utf8_lossy(&buf);
-    let call = tail.lines().rev()
-        .filter(|l| l.contains("\"tool_use\""))
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find_map(|v| v["message"]["content"].as_array()?.iter().rev()
-            .find(|c| c["type"] == "tool_use").cloned())?;
-    let name = call["name"].as_str()?;
-    let input = &call["input"];
+    if f.seek(SeekFrom::Start(len.saturating_sub(65_536))).is_err() || f.read_to_end(&mut buf).is_err() {
+        return out;
+    }
+    for l in String::from_utf8_lossy(&buf).lines() {
+        let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+        let content = &v["message"]["content"];
+        let blocks = content.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+        if v["type"] == "user" {
+            let results: Vec<&str> = blocks.iter()
+                .filter(|b| b["type"] == "tool_result")
+                .filter_map(|b| b["tool_use_id"].as_str())
+                .collect();
+            if !results.is_empty() {
+                out.retain(|(id, _)| !results.contains(&id.as_str()));
+            } else if content.is_string() || blocks.iter().any(|b| b["type"] == "text") {
+                out.clear();
+            }
+        } else if v["type"] == "assistant" {
+            for b in blocks.iter().filter(|b| b["type"] == "tool_use") {
+                if let Some(id) = b["id"].as_str() {
+                    out.push((id.to_string(), call_line(b)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// "Bash: git push": the tool and the first line of what it is given.
+fn call_line(b: &Value) -> String {
+    let input = &b["input"];
     let what = ["command", "file_path", "url", "pattern", "path"].iter()
         .find_map(|k| input[*k].as_str())
         .or_else(|| input.as_object()?.values().find_map(|v| v.as_str()))
         .unwrap_or("");
-    Some(plain(&format!("{}: {}", name, what.lines().next().unwrap_or(""))))
+    plain(&format!("{}: {}", b["name"].as_str().unwrap_or("?"), what.lines().next().unwrap_or("")))
 }
 
 /// The session's tag: its first bookmark tag, else its id's start.
@@ -187,7 +241,7 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for s in sess {
-        (&s.tag, auto.contains(&s.tag), s.state.label(), &s.eta, s.ws, &s.model, &s.prompt).hash(&mut h);
+        (&s.tag, auto.contains(&s.tag), s.state.label(), &s.eta, s.ws, &s.model, &s.prompt, &s.ask).hash(&mut h);
         s.moves.len().hash(&mut h);
         for m in &s.moves {
             (m.num, &m.text).hash(&mut h);
@@ -209,6 +263,7 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
         json!({"tag": s.tag, "auto": auto.contains(&s.tag), "state": s.state.label(),
                "eta": s.eta, "ws": s.ws.map(|w| w + 1), "model": s.model,
                "prompt": cut(&s.prompt, 200), "moves": moves,
+               "ask": s.ask.as_ref().map(|(call, line)| json!({"call": call, "line": line})),
                "at": now.saturating_sub(s.age_secs), "ctx": s.ctx_k})
     }).collect();
     let tmp = relay.join(".sessions.tmp");
@@ -371,7 +426,7 @@ mod tests {
             state, tagged: true, age_secs, model: "opus".into(), prompt: "Run the suite".into(),
             pid: None, ws: Some(3), ctx_k: Some(120), at_prompt: false,
             moves: vec![crate::open::Open { num: 2, at: 0, text: "Restart kastrup?".into() }],
-            eta: "14:20".into(),
+            eta: "14:20".into(), ask: None,
         };
         let mut last = 0;
         let auto: HashSet<String> = ["ci".to_string()].into();
@@ -395,6 +450,12 @@ mod tests {
         publish_in(&home, &[one(crate::sessions::State::Yours, 0)], &HashSet::new(), 160, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!((v["t"].as_u64(), v["sessions"][0]["auto"].as_bool()), (Some(160), Some(false)));
+        // A dialog comes up: written again, with what it asks.
+        let mut asking = one(crate::sessions::State::Yours, 0);
+        asking.ask = Some(("toolu_1".into(), "Bash: git push".into()));
+        publish_in(&home, &[asking], &HashSet::new(), 170, &mut last);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v["sessions"][0]["ask"], json!({"call": "toolu_1", "line": "Bash: git push"}));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -417,10 +478,10 @@ mod tests {
         std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
         let log = home.join("t.jsonl");
         std::fs::write(&log, concat!(
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]}}"#, "\n",
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#, "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/a"}}]}}"#, "\n",
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","content":"ok"}]}}"#, "\n",
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Pushing."},"#,
-            r#"{"type":"tool_use","name":"Bash","input":{"command":"git push origin master\nmore","description":"Push"}}]}}"#, "\n",
+            r#"{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"git push origin master\nmore","description":"Push"}}]}}"#, "\n",
         )).unwrap();
         let v = json!({"session_id": "abc", "transcript_path": log, "notification_type": "permission_prompt",
                        "message": "Claude needs your permission to use Bash"});
@@ -430,10 +491,33 @@ mod tests {
         let e = got(&home);
         assert_eq!((e["kind"].as_str(), e["line"].as_str(), e["t"].as_u64()),
                    (Some("ask"), Some("Bash: git push origin master"), Some(7)));
+        // The mark the list reads: the one call that waits.
+        assert_eq!(std::fs::read_to_string(home.join(".fleet/ask/abc")).unwrap(), "b1\tBash: git push origin master\n");
+        // The turn ends: the mark goes.
+        note_in(&home, &json!({"session_id": "abc", "last_assistant_message": "Pushed."}), 9, "ci");
+        assert!(!home.join(".fleet/ask/abc").exists());
         // No transcript to read: the dialog's own words.
         ask_in(&home, &json!({"session_id": "abc", "message": "Claude needs your permission to use Bash"}), 8, "ci");
         assert_eq!(got(&home)["line"], "Claude needs your permission to use Bash");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_calls_without_a_result_are_the_ones_that_wait() {
+        let log = std::env::temp_dir().join(format!("fleet-pending-{}.jsonl", std::process::id()));
+        let use_ = |id: &str, cmd: &str| format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"{}","name":"Bash","input":{{"command":"{}"}}}}]}}}}"#, id, cmd);
+        let result = |id: &str| format!(
+            r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"{}","content":"ok"}}]}}}}"#, id);
+        let prompt = r#"{"type":"user","message":{"content":"go on"}}"#;
+        let write = |lines: &[String]| std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+        write(&[use_("a", "ls"), result("a"), use_("b", "rm x"), use_("c", "git push")]);
+        assert_eq!(pending(&log), [("b".to_string(), "Bash: rm x".to_string()), ("c".into(), "Bash: git push".into())]);
+        // A call left without a result in an old turn waits no more.
+        write(&[use_("a", "ls"), prompt.into(), use_("d", "make")]);
+        assert_eq!(pending(&log), [("d".to_string(), "Bash: make".to_string())]);
+        let _ = std::fs::remove_file(&log);
+        assert!(pending(&log).is_empty());
     }
 
     #[test]

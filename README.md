@@ -245,7 +245,9 @@ at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
 - A permission dialog that stays up a few seconds goes out as kind `ask`,
   with the tool and what it wants to run ("Bash: git push"). This needs
   a Notification hook with the matcher `permission_prompt` that runs
-  `fleet --hook`.
+  `fleet --hook`. The hook also marks the dialog in `~/.fleet/ask/`, and
+  the session list carries it as `ask` while the session still stops at
+  that call; the turn's end removes the mark.
 
 `server/fleet-mcp.py` serves them: a GET with `?done=SINCE&wait=SECS`
 answers with the turns finished after SINCE, waiting up to 80 seconds
