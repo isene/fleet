@@ -259,9 +259,10 @@ dialogs that wait. The hook
 writes nothing without a relay folder.
 
 fleet itself writes `sessions.json` to the relay folder: the session
-list as its screen shows it, with each session's open items and » mark.
-It writes when a state, ETA, prompt, workspace, model, open item or »
-mark changes; age
+list as its screen shows it, with each session's open items and » mark,
+and `usage`: the weekly limit as the header shows it (percent used, the
+Fable share, when it resets). It writes when a state, ETA, prompt,
+workspace, model, open item, » mark or the weekly use changes; age
 and context size alone write nothing. A GET with
 `?sessions=STAMP&wait=SECS` answers with the list once the file's time
 differs from STAMP, or a new answer came. Each session in it carries

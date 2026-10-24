@@ -20,9 +20,10 @@ def test_the_session_list_comes_when_it_changed(tmp_path, monkeypatch):
     # No list yet: the first ask gets an empty one at once.
     first = fm.sessions(-1, 0)
     assert (first["stamp"], first["sessions"]) == (0, [])
-    (tmp_path / "sessions.json").write_text('{"t": 5, "sessions": [{"tag": "ci", "state": "YOURS"}]}')
+    (tmp_path / "sessions.json").write_text('{"t": 5, "sessions": [{"tag": "ci", "state": "YOURS"}], "usage": {"week": 6}}')
     view = fm.sessions(first["stamp"], 0)
     assert view["sessions"][0]["tag"] == "ci" and view["stamp"] > 0
+    assert view["usage"] == {"week": 6}
     # Unchanged: the stamp alone, after the wait.
     assert fm.sessions(view["stamp"], 0) == {"stamp": view["stamp"]}
 

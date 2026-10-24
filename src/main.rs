@@ -301,8 +301,8 @@ fn main() {
     let mut marked: Vec<std::path::PathBuf> = Vec::new();
     let mut marked_s: Vec<std::path::PathBuf> = Vec::new();
     let mut flash = String::new();
-    let mut rates: (std::time::SystemTime, String) =
-        (std::time::UNIX_EPOCH, String::new());
+    let mut rates: (std::time::SystemTime, String, serde_json::Value) =
+        (std::time::UNIX_EPOCH, String::new(), serde_json::Value::Null);
     // Files seen in relay/phone: new arrivals are laptop→phone sends,
     // logged here since no hook observes that direction. The baseline
     // pass logs nothing, or every restart would re-log leftovers.
@@ -353,7 +353,8 @@ fn main() {
                 config::write_parked(&cfg.parked);
             }
         }
-        done::publish(&sess, &cfg.autowake, now_secs(), &mut published);
+        refresh_rates(&mut rates);
+        done::publish(&sess, &cfg.autowake, &rates.2, now_secs(), &mut published);
         let items = inbox::scan(&cfg);
         let pdir = config::home().join(".fleet/relay/phone");
         let names: Vec<String> = std::fs::read_dir(&pdir)
@@ -484,7 +485,6 @@ fn main() {
             f.draw();
         }
         if over.is_none() {
-            refresh_rates(&mut rates);
             draw_header(cols, &sess, &items, &rates.1);
             if let Some(rows_r) = &rollup_rows {
                 draw_rollup(cols, 2, body as u16, rows_r);
@@ -1026,8 +1026,9 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) 
 /// Usage percentages, statusline-style: "[4%/28%(51%) Fri 21:00]".
 /// Read from the statusline's own OAuth usage cache; the running CC
 /// sessions keep that file fresh, so fleet only stats it and re-reads
-/// on mtime change. Never fetches anything itself.
-fn refresh_rates(cache: &mut (std::time::SystemTime, String)) {
+/// on mtime change. Never fetches anything itself. The weekly numbers
+/// also go to the phone with the session list.
+fn refresh_rates(cache: &mut (std::time::SystemTime, String, serde_json::Value)) {
     let path = "/tmp/claude-oauth-usage-cache.json";
     let mtime = match std::fs::metadata(path).and_then(|m| m.modified()) {
         Ok(t) => t,
@@ -1037,14 +1038,14 @@ fn refresh_rates(cache: &mut (std::time::SystemTime, String)) {
         return;
     }
     cache.0 = mtime;
-    cache.1 = build_rates(path).unwrap_or_default();
+    (cache.1, cache.2) = build_rates(path).unwrap_or_default();
 }
 
 fn rate_color(p: u64) -> u8 {
     if p < 50 { 65 } else if p < 80 { 136 } else { 124 }
 }
 
-fn build_rates(path: &str) -> Option<String> {
+fn build_rates(path: &str) -> Option<(String, serde_json::Value)> {
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let (mut sess, mut week, mut fable, mut resets) = (None, None, None, None);
@@ -1063,6 +1064,8 @@ fn build_rates(path: &str) -> Option<String> {
             _ => {}
         }
     }
+    let resets = resets.as_deref().and_then(rollup::iso_to_epoch);
+    let week_json = serde_json::json!({"week": week, "fable": fable, "resets": resets});
     let g = |s: &str| style::fg(s, 242);
     let mut out = g("[");
     if let Some(p) = sess {
@@ -1077,7 +1080,7 @@ fn build_rates(path: &str) -> Option<String> {
         out += &style::fg(&format!("{}%", p), rate_color(p));
         out += &g(")");
     }
-    if let Some(e) = resets.as_deref().and_then(rollup::iso_to_epoch) {
+    if let Some(e) = resets {
         let d = Command::new("date")
             .args(["-d", &format!("@{}", e), "+%a %H:%M"])
             .output()
@@ -1089,7 +1092,7 @@ fn build_rates(path: &str) -> Option<String> {
         }
     }
     out += &g("]");
-    Some(out)
+    Some((out, week_json))
 }
 
 /// Full-width bold header bar on a dark background, for readability.

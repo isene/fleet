@@ -227,19 +227,22 @@ fn hyperlist(home: &Path, text: &str) -> String {
 /// ETA, prompt, workspace, model or open item changes. Age and context
 /// size ride along but write nothing alone, or a working session would
 /// send a file every tick. Between writes it costs one string compare.
-pub fn publish(sess: &[crate::sessions::Session], auto: &HashSet<String>, now: u64, last: &mut u64) {
-    publish_in(&crate::config::home(), sess, auto, now, last);
+pub fn publish(sess: &[crate::sessions::Session], auto: &HashSet<String>, usage: &Value, now: u64, last: &mut u64) {
+    publish_in(&crate::config::home(), sess, auto, usage, now, last);
 }
 
 /// `auto` holds the tags fleet wakes by itself (its » mark). The workspace
-/// goes out counted from 1, as fleet's screen shows it.
+/// goes out counted from 1, as fleet's screen shows it. `usage` is the
+/// weekly limit as the header shows it: percent used, the Fable share,
+/// and when it resets.
 ///
 /// Every 2 s tick hashes what the phone shows, about 4 µs for 15 sessions
 /// (the JSON itself took 45 µs). Age and context size are left out of the
 /// hash, so they alone never write the file.
-fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<String>, now: u64, last: &mut u64) {
+fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<String>, usage: &Value, now: u64, last: &mut u64) {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    usage.to_string().hash(&mut h);
     for s in sess {
         (&s.tag, auto.contains(&s.tag), s.state.label(), &s.eta, s.ws, &s.model, &s.prompt, &s.ask).hash(&mut h);
         s.moves.len().hash(&mut h);
@@ -267,7 +270,7 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
                "at": now.saturating_sub(s.age_secs), "ctx": s.ctx_k})
     }).collect();
     let tmp = relay.join(".sessions.tmp");
-    if std::fs::write(&tmp, json!({"t": now, "sessions": rows}).to_string() + "\n").is_ok() {
+    if std::fs::write(&tmp, json!({"t": now, "sessions": rows, "usage": usage}).to_string() + "\n").is_ok() {
         let _ = std::fs::rename(&tmp, relay.join("sessions.json"));
     }
 }
@@ -430,7 +433,7 @@ mod tests {
         };
         let mut last = 0;
         let auto: HashSet<String> = ["ci".to_string()].into();
-        publish_in(&home, &[one(crate::sessions::State::Working, 5)], &auto, 100, &mut last);
+        publish_in(&home, &[one(crate::sessions::State::Working, 5)], &auto, &Value::Null, 100, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         let s = &v["sessions"][0];
         assert_eq!((s["tag"].as_str(), s["state"].as_str(), s["eta"].as_str()), (Some("ci"), Some("working"), Some("14:20")));
@@ -440,22 +443,29 @@ mod tests {
         assert_eq!(s["moves"][0]["num"], 2);
         // An older age alone writes nothing.
         std::fs::remove_file(&file).unwrap();
-        publish_in(&home, &[one(crate::sessions::State::Working, 50)], &auto, 145, &mut last);
+        publish_in(&home, &[one(crate::sessions::State::Working, 50)], &auto, &Value::Null, 145, &mut last);
         assert!(!file.exists());
         // The answer is in: written again.
-        publish_in(&home, &[one(crate::sessions::State::Yours, 0)], &auto, 150, &mut last);
+        publish_in(&home, &[one(crate::sessions::State::Yours, 0)], &auto, &Value::Null, 150, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!((v["t"].as_u64(), v["sessions"][0]["state"].as_str()), (Some(150), Some("YOURS")));
         // Auto-wake switched off with `a`: written again.
-        publish_in(&home, &[one(crate::sessions::State::Yours, 0)], &HashSet::new(), 160, &mut last);
+        publish_in(&home, &[one(crate::sessions::State::Yours, 0)], &HashSet::new(), &Value::Null, 160, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!((v["t"].as_u64(), v["sessions"][0]["auto"].as_bool()), (Some(160), Some(false)));
         // A dialog comes up: written again, with what it asks.
         let mut asking = one(crate::sessions::State::Yours, 0);
         asking.ask = Some(("toolu_1".into(), "Bash: git push".into()));
-        publish_in(&home, &[asking], &HashSet::new(), 170, &mut last);
+        publish_in(&home, &[asking], &HashSet::new(), &Value::Null, 170, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(v["sessions"][0]["ask"], json!({"call": "toolu_1", "line": "Bash: git push"}));
+        // The weekly use moves: written again, beside the sessions.
+        let mut asking = one(crate::sessions::State::Yours, 0);
+        asking.ask = Some(("toolu_1".into(), "Bash: git push".into()));
+        let week = json!({"week": 6, "fable": 0, "resets": 1793386800});
+        publish_in(&home, &[asking], &HashSet::new(), &week, 180, &mut last);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!((v["t"].as_u64(), &v["usage"]), (Some(180), &week));
         let _ = std::fs::remove_dir_all(&home);
     }
 
