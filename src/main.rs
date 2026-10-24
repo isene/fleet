@@ -635,6 +635,11 @@ fn main() {
                         let now_i = std::time::Instant::now();
                         let secs = std::time::Duration::from_secs;
                         match sess.iter().find(|s| s.tag == dest) {
+                            // The phone is no session: the server hands it
+                            // the file when its Claude app asks for messages.
+                            _ if dest == "phone" => {
+                                flash = "for the phone: it waits until the phone asks for its fleet messages".into();
+                            }
                             Some(s) if s.ws.is_some() => {
                                 wake = Some((dest, now_i, now_i + secs(30)));
                             }
