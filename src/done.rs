@@ -17,6 +17,10 @@
 //! The whole answer goes beside it, as answer-<tag>.txt, for the phone's
 //! answer screen: HyperList as the laptop shows it, colours included.
 //!
+//! A permission dialog that stays up a few seconds fires Claude Code's
+//! Notification hook. It goes out as kind "ask", with the tool and what it
+//! wants to run, so the phone rings for a session that waits on you.
+//!
 //! Battery: two small file writes per finished answer, never on a timer,
 //! and no event without a relay folder. The files lie beside the tag
 //! folders, not in one, so the fleet-bus Stop hook's `relay/*/*` loop
@@ -67,18 +71,69 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     if !relay.is_dir() {
         return;
     }
-    let tag = safe(tags.split([',', ' ']).find(|t| !t.is_empty()).unwrap_or(""));
-    let tag = if tag.is_empty() { id.chars().take(8).collect() } else { tag };
-    let event = json!({"tag": tag, "t": now, "kind": kind, "eta": eta, "line": first_line(text)});
-    let path = relay.join(format!("done-{}.json", tag));
-    let tmp = relay.join(format!(".done-{}.tmp", tag));
-    if std::fs::write(&tmp, event.to_string() + "\n").is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    let tag = tag_of(tags, &id);
+    put(&relay, &tag, kind, &eta, &first_line(text), now);
     // The whole answer, for the phone's answer screen: the newest only.
     let path = relay.join(format!("answer-{}.txt", tag));
     let tmp = relay.join(format!(".answer-{}.tmp", tag));
     if std::fs::write(&tmp, cut(&hyperlist(home, text), 60_000)).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// A permission dialog that waits: the event the phone rings for.
+pub fn ask(v: &Value, now: u64) {
+    ask_in(&crate::config::home(), v, now, &std::env::var("CC_RESUME_TAGS").unwrap_or_default());
+}
+
+fn ask_in(home: &Path, v: &Value, now: u64, tags: &str) {
+    let Some(id) = v["session_id"].as_str() else { return };
+    let relay = home.join(".fleet/relay");
+    if !relay.is_dir() {
+        return;
+    }
+    let line = v["transcript_path"].as_str()
+        .and_then(|p| asking(Path::new(p)))
+        .unwrap_or_else(|| plain(v["message"].as_str().unwrap_or("Waits for your yes")));
+    put(&relay, &tag_of(tags, &safe(id)), "ask", "", &cut(&line, 200), now);
+}
+
+/// The tool call a permission dialog asks about, from the transcript's
+/// last 64 KB: "Bash: git push", "Edit: src/main.rs".
+fn asking(transcript: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(transcript).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(65_536))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let tail = String::from_utf8_lossy(&buf);
+    let call = tail.lines().rev()
+        .filter(|l| l.contains("\"tool_use\""))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| v["message"]["content"].as_array()?.iter().rev()
+            .find(|c| c["type"] == "tool_use").cloned())?;
+    let name = call["name"].as_str()?;
+    let input = &call["input"];
+    let what = ["command", "file_path", "url", "pattern", "path"].iter()
+        .find_map(|k| input[*k].as_str())
+        .or_else(|| input.as_object()?.values().find_map(|v| v.as_str()))
+        .unwrap_or("");
+    Some(plain(&format!("{}: {}", name, what.lines().next().unwrap_or(""))))
+}
+
+/// The session's tag: its first bookmark tag, else its id's start.
+fn tag_of(tags: &str, id: &str) -> String {
+    let tag = safe(tags.split([',', ' ']).find(|t| !t.is_empty()).unwrap_or(""));
+    if tag.is_empty() { id.chars().take(8).collect() } else { tag }
+}
+
+/// The session's newest event, for the server to hand the phone.
+fn put(relay: &Path, tag: &str, kind: &str, eta: &str, line: &str, now: u64) {
+    let event = json!({"tag": tag, "t": now, "kind": kind, "eta": eta, "line": line});
+    let path = relay.join(format!("done-{}.json", tag));
+    let tmp = relay.join(format!(".done-{}.tmp", tag));
+    if std::fs::write(&tmp, event.to_string() + "\n").is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
 }
@@ -352,6 +407,32 @@ mod tests {
         stop(&home, text, 1);
         // No display hook in this home: the markdown as written.
         assert_eq!(std::fs::read_to_string(home.join(".fleet/relay/answer-ci.txt")).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_waiting_permission_dialog_rings_with_what_it_asks() {
+        let home = std::env::temp_dir().join(format!("fleet-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
+        let log = home.join("t.jsonl");
+        std::fs::write(&log, concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a"}}]}}"#, "\n",
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#, "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Pushing."},"#,
+            r#"{"type":"tool_use","name":"Bash","input":{"command":"git push origin master\nmore","description":"Push"}}]}}"#, "\n",
+        )).unwrap();
+        let v = json!({"session_id": "abc", "transcript_path": log, "notification_type": "permission_prompt",
+                       "message": "Claude needs your permission to use Bash"});
+        ask_in(&home, &v, 7, "ci");
+        let got = |h: &Path| serde_json::from_str::<Value>(
+            &std::fs::read_to_string(h.join(".fleet/relay/done-ci.json")).unwrap()).unwrap();
+        let e = got(&home);
+        assert_eq!((e["kind"].as_str(), e["line"].as_str(), e["t"].as_u64()),
+                   (Some("ask"), Some("Bash: git push origin master"), Some(7)));
+        // No transcript to read: the dialog's own words.
+        ask_in(&home, &json!({"session_id": "abc", "message": "Claude needs your permission to use Bash"}), 8, "ci");
+        assert_eq!(got(&home)["line"], "Claude needs your permission to use Bash");
         let _ = std::fs::remove_dir_all(&home);
     }
 

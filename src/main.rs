@@ -147,6 +147,8 @@ fn main() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
             if v["hook_event_name"] == "Stop" {
                 done::note(&v, now);
+            } else if v["notification_type"] == "permission_prompt" {
+                done::ask(&v, now);
             }
         }
         if let Some(out) = open::hook(&input, now) {

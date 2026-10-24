@@ -242,11 +242,16 @@ at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
   ETA and no "still running" ends that work, and goes out as kind `eta`
   with the ETA it had.
 - Every other answer goes out as kind `turn`.
+- A permission dialog that stays up a few seconds goes out as kind `ask`,
+  with the tool and what it wants to run ("Bash: git push"). This needs
+  a Notification hook with the matcher `permission_prompt` that runs
+  `fleet --hook`.
 
 `server/fleet-mcp.py` serves them: a GET with `?done=SINCE&wait=SECS`
 answers with the turns finished after SINCE, waiting up to 80 seconds
 for one. The phone's fleet app in [nomad](https://github.com/isene/nomad)
-asks it and rings for every turn, or only for ended ETA work. The hook
+asks it and rings for every turn, or only for ended ETA work and
+dialogs that wait. The hook
 writes nothing without a relay folder.
 
 fleet itself writes `sessions.json` to the relay folder: the session
