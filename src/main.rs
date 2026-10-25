@@ -307,6 +307,8 @@ fn main() {
     // logged here since no hook observes that direction. The baseline
     // pass logs nothing, or every restart would re-log leftovers.
     let mut phone_seen: Option<std::collections::HashSet<String>> = None;
+    // When the phone's drop folder last changed, so it is read only then.
+    let mut drops_at: Option<std::time::SystemTime> = None;
     let mut rollup_rows: Option<Vec<rollup::Row>> = None;
     let mut msg_to: Option<(String, String)> = None; // (bus address, shown tag)
     let mut msg_buf = String::new();
@@ -333,6 +335,7 @@ fn main() {
         for s in &mut sess {
             s.ws = s.pid.and_then(|p| sessions::window_ancestor(p, &map));
         }
+        open::phone_drops(&sess, &mut drops_at);
         // Parking is for quiet sessions. One that has started working
         // again says so, and the flag goes with it. One the user has ended
         // drops it too, the same as a session stopped with `k`.

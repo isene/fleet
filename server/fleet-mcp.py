@@ -3,11 +3,13 @@
 
 A minimal Streamable-HTTP MCP server, stdlib only (python 3.8). It runs
 on the relay host (bound to 127.0.0.1, nginx terminates TLS and gates a
-secret URL path) and exposes two tools:
+secret URL path) and exposes three tools:
 
   message_session(tag, text)  write a message into the synced bus folder
   check_messages()            read and consume messages addressed to the
                               phone
+  drop_item(tag, num, text)   take an open item off a session's list,
+                              for one answered on the laptop already
 
 A plain GET of the same address with "?waiting" answers with the number
 of messages that wait for the phone, and consumes nothing. A home-screen
@@ -96,6 +98,25 @@ TOOLS = [
         "annotations": {"readOnlyHint": False, "openWorldHint": False},
     },
     {
+        "name": "drop_item",
+        "description": (
+            "Take one open item off a laptop session's list, for one the "
+            "user has answered on the laptop already. The session is not "
+            "woken. The laptop's fleet deletes it only while the number "
+            "still names an item with this text."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tag": {"type": "string", "description": "The session's tag"},
+                "num": {"type": "integer", "description": "The item's number"},
+                "text": {"type": "string", "description": "The item's text, as the session list has it"},
+            },
+            "required": ["tag", "num", "text"],
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    },
+    {
         "name": "check_messages",
         "description": (
             "Fetch messages the laptop sessions have sent to the phone. "
@@ -127,6 +148,26 @@ def message_session(tag, text):
     poke_syncthing()
     return ("Delivered to '{}'. It syncs to the laptop in seconds, and "
             "fleet wakes that session with it.".format(tag))
+
+
+def drop_item(tag, num, text):
+    """One file per item in the relay's .drop folder, <tag>.<num>, holding
+    the item's text. A dot folder: the laptop's bus hook and inbox read
+    no such folder, so a drop never reaches a session as a message."""
+    tag = (tag or "").strip().lstrip("#")
+    if not TAG.fullmatch(tag):
+        return "Invalid tag; nothing dropped."
+    try:
+        num = int(num)
+    except (TypeError, ValueError):
+        return "Invalid number; nothing dropped."
+    if not 0 < num < 1000:
+        return "Invalid number; nothing dropped."
+    d = BUS / ".drop"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "{}.{}".format(tag, num)).write_text((text or "").strip()[:MAX_TEXT], encoding="utf-8")
+    poke_syncthing()
+    return "Dropped {} from '{}'. The laptop takes it off in seconds.".format(num, tag)
 
 
 def poke_syncthing():
@@ -321,6 +362,8 @@ def handle(msg):
         args = params.get("arguments") or {}
         if name == "message_session":
             text = message_session(args.get("tag"), args.get("text"))
+        elif name == "drop_item":
+            text = drop_item(args.get("tag"), args.get("num"), args.get("text"))
         elif name == "check_messages":
             text = check_messages()
         else:

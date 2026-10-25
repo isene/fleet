@@ -19,13 +19,18 @@
 //! it while the session works. At the end of the turn it shows again,
 //! unless the answer closed it.
 //!
+//! The phone can delete an item too, for one answered on the laptop: the
+//! fleet server writes a file to ~/.fleet/relay/.drop, and fleet deletes
+//! the item while its number still names the item the phone showed.
+//!
 //! Battery: the hook runs once per prompt and once per finished answer,
 //! never on a timer. The list costs fleet one stat of the folder per pass,
 //! and a read only after a file in it changed.
 
 use crate::config::home;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub fn dir() -> PathBuf {
     home().join(".fleet/open")
@@ -206,6 +211,14 @@ impl Ledger {
         l
     }
 
+    /// Delete item `num` while it is the item the phone showed. A closed
+    /// number is free for a new item, which a late drop must not hit.
+    fn drop_seen(&mut self, num: u32, text: &str) -> bool {
+        let n = self.items.len();
+        self.items.retain(|i| !(i.num == num && subject(&i.text) == subject(text)));
+        self.items.len() < n
+    }
+
     /// The lowest number that no open item has and `skip` does not name.
     fn free(&self, skip: &[u32]) -> u32 {
         (1..).find(|n| !skip.contains(n) && !self.items.iter().any(|i| i.num == *n)).unwrap_or(0)
@@ -300,6 +313,45 @@ pub fn delete(id: &str, num: u32) {
     let mut l = Ledger::read(id);
     l.items.retain(|i| i.num != num);
     l.write(id);
+}
+
+/// Items the phone deleted. The fleet server writes one file per item to
+/// ~/.fleet/relay/.drop, named <tag>.<num> and holding the item's text.
+/// A dot folder, so neither the bus hook nor the inbox takes a drop for a
+/// message. Battery: one stat of the folder per pass, a read only after
+/// it changed.
+pub fn phone_drops(sess: &[crate::sessions::Session], seen: &mut Option<SystemTime>) {
+    let d = home().join(".fleet/relay/.drop");
+    let Ok(at) = std::fs::metadata(&d).and_then(|m| m.modified()) else { return };
+    if *seen == Some(at) {
+        return;
+    }
+    *seen = Some(at);
+    for (tag, num, text) in take_drops(&d) {
+        for s in sess.iter().filter(|s| s.tag == tag) {
+            let mut l = Ledger::read(&s.id);
+            if l.drop_seen(num, &text) {
+                l.write(&s.id);
+            }
+        }
+    }
+}
+
+/// Read and remove the drop files in `d`. Syncthing's own temp files
+/// start with a dot and are left to it.
+fn take_drops(d: &Path) -> Vec<(String, u32, String)> {
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(d).into_iter().flatten().flatten() {
+        let name = f.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if let Some((tag, num)) = name.rsplit_once('.').and_then(|(t, n)| Some((t.to_string(), n.parse().ok()?))) {
+            out.push((tag, num, std::fs::read_to_string(f.path()).unwrap_or_default().trim().to_string()));
+        }
+        let _ = std::fs::remove_file(f.path());
+    }
+    out
 }
 
 /// A session's transcript is gone, and its list goes with it.
@@ -412,6 +464,25 @@ mod tests {
             (Some(9), "run the script".to_string())]);
         assert_eq!(said("| File | Size |\n|---|---|\n| a.rs | 12 |\n"), Said::default(),
                    "no Question column, no items");
+    }
+
+    #[test]
+    fn a_drop_from_the_phone_hits_only_the_item_it_showed() {
+        let mut l = Ledger::new();
+        turns(&mut l, &["| # | Question | My recommendation |\n|---|---|---|\n| 1 | Publish it? | Yes |\n\n2. Your move: restart"]);
+        assert!(!l.drop_seen(1, "Restart kastrup?"), "a new item under the number");
+        assert!(l.drop_seen(1, "Publish it? → No"), "the same question with a new recommendation");
+        assert_eq!(l.items.iter().map(|i| i.num).collect::<Vec<_>>(), vec![2]);
+
+        let d = std::env::temp_dir().join(format!("fleet-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("fw-kimi.2"), "restart\n").unwrap();
+        std::fs::write(d.join(".syncthing.ci.3.tmp"), "half").unwrap();
+        assert_eq!(take_drops(&d), vec![("fw-kimi".to_string(), 2, "restart".to_string())]);
+        let left: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().map(|f| f.file_name()).collect();
+        assert_eq!(left, vec![".syncthing.ci.3.tmp"], "Syncthing's file is its own");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

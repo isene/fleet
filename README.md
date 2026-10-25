@@ -210,6 +210,11 @@ as in `3 y` or `3: the second one`. fleet hides that item at once, while
 the session works. It shows again when the turn ends, unless the answer
 closed it.
 
+The phone app's Drop deletes an item too, through the fleet server: a
+file in the relay's `.drop` folder, which fleet reads when it changes.
+It deletes the item only while its number still names the item the
+phone showed.
+
 The `fleet --hook` hook does both. It reads each prompt and each
 finished answer, and keeps one small file per session in
 `~/.fleet/open/`. When a number is missing or taken, it sends the answer

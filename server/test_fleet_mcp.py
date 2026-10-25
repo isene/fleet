@@ -1,5 +1,6 @@
 """Tests for fleet-mcp. Run: pytest server/"""
 import importlib.util
+import subprocess
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("fleet_mcp", Path(__file__).with_name("fleet-mcp.py"))
@@ -13,6 +14,20 @@ def test_a_tag_keeps_its_case(tmp_path, monkeypatch):
     assert fm.message_session("#DI", "hello").startswith("Delivered to 'DI'")
     assert [f.parent.name for f in tmp_path.glob("*/*.msg")] == ["DI"]
     assert fm.message_session("D I", "hello").startswith("Invalid tag")
+
+
+def test_a_drop_is_a_file_no_session_reads(tmp_path, monkeypatch):
+    monkeypatch.setattr(fm, "BUS", tmp_path)
+    monkeypatch.setattr(fm, "poke_syncthing", lambda: None)
+    assert fm.drop_item("fw-kimi", 3, " Restart kastrup? ").startswith("Dropped 3 from 'fw-kimi'")
+    assert (tmp_path / ".drop/fw-kimi.3").read_text() == "Restart kastrup?"
+    assert fm.drop_item("fw kimi", 3, "x").startswith("Invalid tag")
+    assert fm.drop_item("ci", "three", "x").startswith("Invalid number")
+    assert fm.drop_item("ci", 0, "x").startswith("Invalid number")
+    # The laptop's Stop hook looks for messages as the shell sees relay/*/*.
+    seen = subprocess.run(["sh", "-c", 'for f in "$0"/*/*; do [ -f "$f" ] && echo "$f"; done', str(tmp_path)],
+                          capture_output=True, text=True).stdout
+    assert seen == "", "a drop is no message"
 
 
 def test_the_session_list_comes_when_it_changed(tmp_path, monkeypatch):
