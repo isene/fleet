@@ -358,6 +358,14 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
             Some("cli") => saw_cli = true,
             _ => {}
         }
+        // An idle compaction writes the summary, a pile of attachments and
+        // this note after the last answer: often more than the tail holds.
+        // The session still waits at its prompt.
+        if typ == "system" && info.last == '\0'
+            && v["content"].as_str().is_some_and(|c| c.starts_with("Compacted while idle"))
+        {
+            info.last = 'a';
+        }
         if typ == "assistant" {
             let msg = &v["message"];
             if info.last == '\0' {
@@ -759,5 +767,13 @@ mod tests {
         let note = text("One moment.", "tool_use");
         // Claude still has the turn: the note is the newest line.
         assert!(!at_prompt("note", &[PROMPT, &note]));
+    }
+
+    #[test]
+    fn an_idle_compaction_leaves_the_session_at_its_prompt() {
+        let summary = r#"{"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued"}}"#;
+        let idle = r#"{"type":"system","subtype":"informational","content":"Compacted while idle, before the prompt cache expired"}"#;
+        assert!(at_prompt("idle", &[summary, idle]));
+        assert!(!at_prompt("summary", &[PROMPT, summary]), "a compaction inside a turn");
     }
 }
