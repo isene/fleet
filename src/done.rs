@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn the_whole_answer_goes_beside_the_event() {
-        let home = std::env::temp_dir().join(format!("fleet-answer-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("fleet-whole-answer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
         let text = "Done.\n\n- one\n- two";
