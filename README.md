@@ -82,7 +82,8 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `Enter` on a session: raise its own glass (one of several stacked on
   a workspace) and jump to that workspace (xdotool key injection),
   or, when it has no window, resume it in a new glass terminal (detached
-  through `setsid`, so it outlives fleet). A session on a gateway model
+  through `setsid`, so it outlives fleet). With deck installed, that
+  glass runs deck, which paints the session's colour in its own pane. A session on a gateway model
   (`cck`: Kimi through OpenRouter) is resumed through `cck`, so it stays
   on that model
 - `m` on a session: type a message, Enter drops it on the bus
@@ -91,9 +92,10 @@ ln -s "$PWD/target/release/fleet" ~/bin/fleet
 - `w` on a session: set the workspace its glass opens on (1-9, `0` for
   10, `-` clears). The prompt is prefilled with the current value.
   Saved to `~/.fleetrc`, applied next time you resume it
-- `b` on a session: pick its glass background with `prism`, preloaded
-  with the current colour. Saved to `~/.fleetrc`, applied next resume
-  via the `GLASS_BG` env
+- `b` on a session: pick its colour with `prism`, preloaded with the
+  current colour. Saved to `~/.fleetrc`. deck paints it in its answer
+  pane; a session resumed without deck gets it as its glass background
+  (the `GLASS_BG` env)
 - `t` on a session: set its window title, `#tag` when left empty. An open
   window is renamed at once. A resumed one starts with the title, and
   Claude Code is told to keep it (`CLAUDE_CODE_DISABLE_TERMINAL_TITLE`)

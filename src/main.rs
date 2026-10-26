@@ -1416,20 +1416,6 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     // no longer takes the resumed session down with it.
     let mut c = Command::new("setsid");
     c.arg("glass");
-    // Per-session background: glass reads GLASS_BG and overrides .glassrc.
-    if let Some(bg) = pref.and_then(|p| p.bg.as_ref()) {
-        c.env("GLASS_BG", bg);
-    }
-    // The window title: the one set with t, or #tag. A small sh names
-    // the window before Claude Code starts, and Claude Code is told to
-    // leave the name alone.
-    let title = session_title(s, pref);
-    if let Some(t) = &title {
-        c.env("FLEET_TITLE", style::title_seq(t));
-        c.env("CLAUDE_CODE_DISABLE_TERMINAL_TITLE", "1");
-        c.args(["-e", "/bin/sh", "-c", "printf %s \"$FLEET_TITLE\"; exec \"$@\"", "sh"]);
-    }
-    let flag = |c: &mut Command| if title.is_none() { c.arg("-e"); };
     // Resume by name only while the name belongs to this session alone.
     // `c <tag>` opens the first bookmark carrying the tag, so a name
     // left on a second, usually long-dead session opens that one and it
@@ -1441,22 +1427,44 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     // endpoint and model again; c or claude would bring it back on the
     // default Claude model.
     let gateway = s.model.contains('/');
-    if owns_tag {
-        let resumer = if gateway { "cck" } else { "c" };
-        let Some(bin) = which(resumer) else {
-            return format!("session resumer '{}' not in PATH", resumer);
-        };
-        flag(&mut c);
-        c.args([&bin, &s.tag]);
+    // deck, when it is installed, shows the session in panes and paints
+    // the session's colour in its answer pane, so glass keeps its usual
+    // background and deck names the window. deck runs Claude Code only,
+    // so a gateway session opens the old way.
+    if let Some(bin) = which("deck").filter(|_| !gateway) {
+        c.args(["-e", bin.as_str(), if owns_tag { s.tag.as_str() } else { s.id.as_str() }]);
     } else {
-        let resumer = if gateway { "cck" } else { "claude" };
-        let Some(bin) = which(resumer) else {
-            return format!("'{}' not in PATH", resumer);
-        };
-        flag(&mut c);
-        c.args([&bin, "--resume", &s.id]);
-        if !s.cwd.is_empty() {
-            c.current_dir(&s.cwd);
+        // Per-session background: glass reads GLASS_BG and overrides .glassrc.
+        if let Some(bg) = pref.and_then(|p| p.bg.as_ref()) {
+            c.env("GLASS_BG", bg);
+        }
+        // The window title: the one set with t, or #tag. A small sh names
+        // the window before Claude Code starts, and Claude Code is told to
+        // leave the name alone.
+        let title = session_title(s, pref);
+        if let Some(t) = &title {
+            c.env("FLEET_TITLE", style::title_seq(t));
+            c.env("CLAUDE_CODE_DISABLE_TERMINAL_TITLE", "1");
+            c.args(["-e", "/bin/sh", "-c", "printf %s \"$FLEET_TITLE\"; exec \"$@\"", "sh"]);
+        }
+        let flag = |c: &mut Command| if title.is_none() { c.arg("-e"); };
+        if owns_tag {
+            let resumer = if gateway { "cck" } else { "c" };
+            let Some(bin) = which(resumer) else {
+                return format!("session resumer '{}' not in PATH", resumer);
+            };
+            flag(&mut c);
+            c.args([&bin, &s.tag]);
+        } else {
+            let resumer = if gateway { "cck" } else { "claude" };
+            let Some(bin) = which(resumer) else {
+                return format!("'{}' not in PATH", resumer);
+            };
+            flag(&mut c);
+            c.args([&bin, "--resume", &s.id]);
+            if !s.cwd.is_empty() {
+                c.current_dir(&s.cwd);
+            }
         }
     }
     // stdin too: a child that inherits fleet's pty keeps it open for its
@@ -2010,7 +2018,7 @@ fn help() -> Over {
     t.push_str(&format!("{}auto-wake: check messages by itself (»)\n", key("a")));
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
-    t.push_str(&format!("{}pick its glass background (prism)\n", key("b")));
+    t.push_str(&format!("{}pick its colour: deck's pane, else glass (prism)\n", key("b")));
     t.push_str(&format!("{}set its window title (default #tag)\n", key("t")));
     t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
     t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));
