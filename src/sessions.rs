@@ -220,12 +220,10 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 continue;
             }
             let info = cached_tail(cache, &path, mtime);
-            // A headless run (`claude -p` from a script) is not a session
-            // anyone sits in; twenty of them bury the real list.
-            if info.headless {
+            let pid = procs.get(&id).copied();
+            if hidden(info.headless, tags.contains_key(&id), pid.is_some()) {
                 continue;
             }
-            let pid = procs.get(&id).copied();
             let state = if !recent {
                 State::Older
             } else if pid.is_none() {
@@ -569,6 +567,13 @@ fn short_model(m: &str) -> String {
 /// its session. A plain `claude` or `claude -c` (cck in a directory) does
 /// not, so it is matched to the newest transcript of the project it runs
 /// in, which is the one `-c` continues or a new session just wrote.
+/// A headless run (`claude -p` from a script) is not a session anyone
+/// sits in; twenty of them bury the real list. deck runs `claude -p` too,
+/// so a session with a bookmark tag or a running process stays listed.
+fn hidden(headless: bool, tagged: bool, running: bool) -> bool {
+    headless && !tagged && !running
+}
+
 fn claude_procs() -> HashMap<String, u32> {
     let mut out = HashMap::new();
     let proc_dir = match std::fs::read_dir("/proc") {
@@ -744,6 +749,14 @@ pub fn load_tags() -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deck_session_is_not_hidden_as_a_script_run() {
+        assert!(hidden(true, false, false));
+        assert!(!hidden(true, true, false));
+        assert!(!hidden(true, false, true));
+        assert!(!hidden(false, false, false));
+    }
 
     #[test]
     fn a_running_turn_drops_a_past_eta_of_the_turn_before() {
