@@ -347,6 +347,17 @@ fn eta_clock(line: &str) -> Option<String> {
     best.map(String::from).or(unknown.then(|| "?".into()))
 }
 
+/// Whether an ETA ("14:20") has passed at `now` ("15:05"). One more than
+/// 12 hours back reads as tomorrow's, and "?" is never late.
+pub fn late(eta: &str, now: &str) -> bool {
+    let mins = |hm: &str| hm.split_once(':')
+        .and_then(|(h, m)| Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?));
+    match (mins(eta), mins(now)) {
+        (Some(e), Some(n)) => (1..720).contains(&(n - e).rem_euclid(1440)),
+        _ => false,
+    }
+}
+
 /// Minutes since midnight of "14:20"; "?" counts as 0.
 fn minutes(clock: &str) -> u32 {
     clock.split_once(':').and_then(|(h, m)| Some(h.parse::<u32>().ok()? * 60 + m.parse::<u32>().ok()?)).unwrap_or(0)
@@ -397,6 +408,15 @@ mod tests {
         note_in(home, &json!({"session_id": "s-1", "last_assistant_message": text}), t, "ci");
         let f = home.join(".fleet/relay/done-ci.json");
         serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_eta_is_late_once_its_time_has_passed() {
+        assert!(late("14:45", "15:40"));
+        assert!(late("23:50", "00:10"));
+        assert!(!late("16:05", "15:40"));
+        assert!(!late("15:40", "15:40"));
+        assert!(!late("?", "15:40"));
     }
 
     #[test]

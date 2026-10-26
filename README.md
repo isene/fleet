@@ -52,8 +52,9 @@ that at a glance, in one TUI.
   `idle`, `off` (no process)
 - ETA: the clock time the session gave for work still running, `?` for
   "ETA unknown". While a turn runs it is the latest one said in that
-  turn; after it, the latest one its last answer gave. It turns red once
-  that time has passed
+  turn, or else the one the turn before gave until that time passes;
+  after it, the latest one its last answer gave. It turns red once that
+  time has passed
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt
 - Sorted so CAPPED and YOURS float to the top

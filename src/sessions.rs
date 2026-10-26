@@ -143,6 +143,7 @@ const PROC_SWEEP_SECS: u64 = 10;
 
 pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
     let now = SystemTime::now();
+    let clock = crate::local_stamp(crate::now_secs());
     let tags = load_tags();
     let procs = {
         let stale = now.duration_since(cache.procs_at)
@@ -276,9 +277,8 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             // While the turn runs, the newest ETA said in it; once the
             // turn has ended, the one its last answer gave, from the hook.
             let at_prompt = info.last == 'a' && !info.turn_open;
-            let eta = if !at_prompt && matches!(state, State::Working | State::Yours)
-                && !info.eta.is_empty() {
-                info.eta.clone()
+            let eta = if !at_prompt && matches!(state, State::Working | State::Yours) {
+                running_eta(&info.eta, eta, &clock[11..])
             } else {
                 eta
             };
@@ -474,6 +474,19 @@ fn user_text(content: &Value) -> Option<String> {
         return None;
     }
     Some(clean.chars().take(240).collect())
+}
+
+/// The ETA of a running turn: the newest it said, else the mark the turn
+/// before left, while that is not past. A turn that ran an hour past the
+/// last ETA it said within the tail showed the earlier turn's ETA in red.
+fn running_eta(said: &str, mark: String, now: &str) -> String {
+    if !said.is_empty() {
+        said.to_string()
+    } else if crate::done::late(&mark, now) {
+        String::new()
+    } else {
+        mark
+    }
 }
 
 /// Text in a user entry that the user did not type.
@@ -731,6 +744,14 @@ pub fn load_tags() -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_running_turn_drops_a_past_eta_of_the_turn_before() {
+        assert_eq!(running_eta("", "14:45".into(), "15:40"), "");
+        assert_eq!(running_eta("", "16:05".into(), "15:40"), "16:05");
+        assert_eq!(running_eta("18:00", "14:45".into(), "15:40"), "18:00");
+        assert_eq!(running_eta("", "?".into(), "15:40"), "?");
+    }
 
     const PROMPT: &str = r#"{"type":"user","cwd":"/x","entrypoint":"cli","message":{"content":"do it"}}"#;
 

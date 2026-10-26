@@ -1128,12 +1128,9 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
     // An ETA already past shows red: the work ran late, or its session
     // never said it ended.
     let now = local_stamp(now_secs());
-    let mins = |hm: &str| hm.split_once(':')
-        .and_then(|(h, m)| Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?));
-    let now_m = mins(&now[11..]).unwrap_or(0);
     for (i, s) in sess.iter().take(take).enumerate() {
         let width = (cols as usize).saturating_sub(50 + tag_w);
-        let late = mins(&s.eta).is_some_and(|m| (1..720).contains(&(now_m - m).rem_euclid(1440)));
+        let late = done::late(&s.eta, &now[11..]);
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
