@@ -307,8 +307,9 @@ fn eta_line(text: &str) -> Option<String> {
 /// Verbs that give a finish time with "at" and a clock time: "done at 14:20".
 const FINISH: [&str; 8] = ["ends", "end", "finishes", "finish", "done", "ready", "completes", "lands"];
 
-/// Words that make the clock time after them a start, as in "started about 12:00".
-const START: [&str; 6] = ["started", "start", "began", "begun", "since", "from"];
+/// Words that make the clock time after them a start, as in "started about 12:00"
+/// or a task's "run it after about 16:00 tomorrow".
+const START: [&str; 7] = ["started", "start", "began", "begun", "since", "from", "after"];
 
 /// The latest time a line gives for work to end, read as the style hook
 /// reads it: a clock time after "ETA", "about", "around", "by", "before",
@@ -597,6 +598,8 @@ mod tests {
         assert_eq!(c("The faults are planted one at a time; it all ends about 13:05.").as_deref(), Some("13:05"));
         assert_eq!(c("The build should be done by 10:25.").as_deref(), Some("10:25"));
         assert_eq!(c("The run started about 12:00."), None);
+        // As DI wrote it on 2026-10-28: a task for tomorrow, not work that runs.
+        assert_eq!(c("2. Your move: after about 16:00 tomorrow, run the flip."), None);
         // As DI wrote it on 2026-10-22: "at about", and two times in one line.
         assert_eq!(c("All five columns finish at about 15:02, and the scores follow at about 15:20.").as_deref(), Some("15:20"));
         assert_eq!(c("Done at 14:20, ~14:35 at the latest.").as_deref(), Some("14:35"));
