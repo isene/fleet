@@ -27,6 +27,8 @@ What keeps you in charge:
 - every message shows in the INBOX pane, and `M` lists them all
 - auto-wake is set per session with `a`, at most 4 times in 30 minutes;
   a message from your phone wakes its session without it
+- gluon reads its own messages as they land, so fleet types nothing into
+  its window, where the keys would reach the wrong pane
 - a session gets its messages once per turn, so two sessions cannot keep
   answering each other
 - fleet never types into the window you are working in, unless the

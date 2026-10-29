@@ -48,6 +48,13 @@ mod os {
             .and_then(|v| v.trim().parse().ok())
     }
 
+    /// True when the session reads its fleet messages without being typed
+    /// to: deck under gluon starts Claude with FLEET_SELF_WAKE=1.
+    pub fn wakes_itself(pid: u32) -> bool {
+        std::fs::read(format!("/proc/{}/environ", pid))
+            .is_ok_and(|e| e.split(|b| *b == 0).any(|v| v == b"FLEET_SELF_WAKE=1"))
+    }
+
     /// Each child's pid and name, with the children of every thread.
     pub fn children(pid: u32) -> Vec<(u32, String)> {
         let mut out = Vec::new();
@@ -165,6 +172,11 @@ mod os {
         Some(info.pbi_ppid)
     }
 
+    /// gluon, the one host that wakes its session itself, runs on Linux.
+    pub fn wakes_itself(_pid: u32) -> bool {
+        false
+    }
+
     pub fn children(pid: u32) -> Vec<(u32, String)> {
         pid_list(|b, n| unsafe { libc::proc_listchildpids(pid as libc::pid_t, b, n) })
             .into_iter()
@@ -173,4 +185,24 @@ mod os {
     }
 }
 
-pub use os::{alive, children, claude_pids, cwd, ppid};
+pub use os::{alive, children, claude_pids, cwd, ppid, wakes_itself};
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    #[test]
+    fn a_process_started_with_the_mark_wakes_itself() {
+        let mut marked = std::process::Command::new("sleep").arg("5")
+            .env("FLEET_SELF_WAKE", "1").spawn().unwrap();
+        // spawn can return before the child's exec, while it still has
+        // the test's own environment; wait for the exec.
+        let marked_now = || super::wakes_itself(marked.id());
+        let seen = (0..100).any(|_| marked_now() || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            false
+        });
+        assert!(seen);
+        assert!(!super::wakes_itself(std::process::id()));
+        let _ = marked.kill();
+        let _ = marked.wait();
+    }
+}

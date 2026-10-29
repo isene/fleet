@@ -274,10 +274,14 @@ fn main() {
             std::process::exit(1);
         };
         let windows = wm.pid_windows();
-        let xid = sessions::scan(&cfg, &mut cache).into_iter()
+        let pid = sessions::scan(&cfg, &mut cache).into_iter()
             .find(|s| s.tag == tag)
-            .and_then(|s| s.pid)
-            .and_then(|pid| sessions::window_ancestor(pid, &windows));
+            .and_then(|s| s.pid);
+        if pid.is_some_and(procs::wakes_itself) {
+            println!("{} reads its own messages", tag);
+            return;
+        }
+        let xid = pid.and_then(|pid| sessions::window_ancestor(pid, &windows));
         match xid {
             Some(x) if wm.type_line(x, WAKE_PROMPT) => {
                 println!("{} asked to check its messages", tag);
@@ -458,11 +462,17 @@ fn main() {
         if let Some((tag, not_before, give_up)) = wake.clone() {
             let now_i = std::time::Instant::now();
             if now_i >= not_before {
-                let xid = sess.iter().find(|s| s.tag == tag)
-                    .and_then(|s| s.pid)
+                // gluon reads its messages as they land; keys typed into
+                // its window would go to whatever pane has them.
+                let pid = sess.iter().find(|s| s.tag == tag).and_then(|s| s.pid);
+                let own = pid.is_some_and(procs::wakes_itself);
+                let xid = pid.filter(|_| !own)
                     .and_then(|pid| wm.as_ref()
                         .and_then(|c| sessions::window_ancestor(pid, &c.pid_windows())));
-                if let Some(x) = xid {
+                if own {
+                    flash = format!("{} reads its own messages", tag);
+                    wake = None;
+                } else if let Some(x) = xid {
                     wm.as_ref().map(|c| c.type_line(x, WAKE_PROMPT));
                     flash = format!("{} asked to check its messages", tag);
                     wake = None;
