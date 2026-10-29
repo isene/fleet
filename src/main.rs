@@ -15,6 +15,7 @@ mod config;
 mod done;
 mod inbox;
 mod open;
+mod procs;
 mod rollup;
 mod search;
 mod sessions;

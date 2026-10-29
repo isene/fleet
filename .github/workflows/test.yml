@@ -1,0 +1,41 @@
+name: Test
+
+# Finding sessions is the one part of fleet that differs between Linux
+# and macOS, so it is tested on both whenever that code changes.
+on:
+  push:
+    paths:
+      - 'src/procs.rs'
+      - 'src/sessions.rs'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+  workflow_dispatch:
+
+jobs:
+  procs:
+    name: Find sessions on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fleet
+
+      - name: Checkout crust
+        uses: actions/checkout@v4
+        with:
+          repository: isene/crust
+          path: crust
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        working-directory: fleet
+        run: cargo build --release
+
+      - name: Fake claude sessions are seen running
+        working-directory: fleet
+        run: tests/procs.sh target/release/fleet

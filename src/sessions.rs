@@ -155,9 +155,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
         } else {
             // Between sweeps, only drop the ones that have gone: one
             // stat per known session, not one read per process alive.
-            cache.procs.retain(|_, pid| {
-                Path::new(&format!("/proc/{}", pid)).exists()
-            });
+            cache.procs.retain(|_, pid| crate::procs::alive(*pid));
         }
         cache.procs.clone()
     };
@@ -536,7 +534,7 @@ pub fn stray(path: &Path, tags: &HashMap<String, String>) -> Option<Session> {
     })
 }
 
-/// The claude that runs this session, if one does. A sweep of /proc, so
+/// The claude that runs this session, if one does. A sweep of every process, so
 /// for one question at a time, never for a list.
 pub fn pid_of(id: &str) -> Option<u32> {
     claude_procs().get(id).copied()
@@ -576,25 +574,7 @@ fn hidden(headless: bool, tagged: bool, running: bool) -> bool {
 
 fn claude_procs() -> HashMap<String, u32> {
     let mut out = HashMap::new();
-    let proc_dir = match std::fs::read_dir("/proc") {
-        Ok(d) => d,
-        Err(_) => return out,
-    };
-    for e in proc_dir.flatten() {
-        let name = e.file_name();
-        let pid: u32 = match name.to_string_lossy().parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let comm = std::fs::read_to_string(e.path().join("comm")).unwrap_or_default();
-        if comm.trim() != "claude" {
-            continue;
-        }
-        let cmd = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
-        let args: Vec<String> = cmd
-            .split(|b| *b == 0)
-            .map(|s| String::from_utf8_lossy(s).to_string())
-            .collect();
+    for (pid, args) in crate::procs::claude_pids() {
         let mut resumed = false;
         for w in args.windows(2) {
             if w[0] == "--resume" {
@@ -615,7 +595,7 @@ fn claude_procs() -> HashMap<String, u32> {
 /// Claude Code names the project dir after the cwd with every
 /// non-alphanumeric character turned into '-'.
 fn newest_transcript_for(pid: u32) -> Option<String> {
-    let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid)).ok()?;
+    let cwd = crate::procs::cwd(pid)?;
     let name: String = cwd
         .to_string_lossy()
         .chars()
@@ -647,7 +627,7 @@ pub fn window_ancestor(pid: u32, winmap: &HashMap<u32, u32>) -> Option<u32> {
                 return Some(*ws);
             }
         }
-        cur = ppid(cur)?;
+        cur = crate::procs::ppid(cur)?;
         if cur <= 1 {
             return None;
         }
@@ -666,36 +646,12 @@ fn descendants(pid: u32) -> Vec<String> {
         if steps > 64 {
             break;
         }
-        let tasks = match std::fs::read_dir(format!("/proc/{}/task", p)) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        for t in tasks.flatten() {
-            let children = t.path().join("children");
-            let s = std::fs::read_to_string(children).unwrap_or_default();
-            for c in s.split_whitespace() {
-                if let Ok(cp) = c.parse::<u32>() {
-                    let comm =
-                        std::fs::read_to_string(format!("/proc/{}/comm", cp))
-                            .map(|s| s.trim().to_string())
-                            .unwrap_or_default();
-                    out.push(comm);
-                    queue.push(cp);
-                }
-            }
+        for (cp, comm) in crate::procs::children(p) {
+            out.push(comm);
+            queue.push(cp);
         }
     }
     out
-}
-
-fn ppid(pid: u32) -> Option<u32> {
-    let status = std::fs::read_to_string(format!("/proc/{}/status", pid)).ok()?;
-    for line in status.lines() {
-        if let Some(v) = line.strip_prefix("PPid:") {
-            return v.trim().parse().ok();
-        }
-    }
-    None
 }
 
 /// Every session id whose bookmark carries this tag, in any position.

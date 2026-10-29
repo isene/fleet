@@ -75,6 +75,12 @@ cargo build --release
 ln -s "$PWD/target/release/fleet" ~/bin/fleet
 ```
 
+Or take a build for Linux or macOS from the
+[releases page](https://github.com/isene/fleet/releases). On a Mac,
+fleet lists the sessions, their states and open items, and passes
+messages. Workspaces and raising a session's window need X11, so they
+work on Linux only.
+
 ## Keys
 
 - `TAB` switch between sessions and inbox
