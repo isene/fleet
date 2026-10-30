@@ -294,6 +294,7 @@ fn main() {
     }
 
     Crust::init();
+    Crust::set_app_identity("fleet");
     let (mut cols, mut rows) = Crust::terminal_size();
     let wm = WinMap::connect();
     let mut focus = Focus::Sessions;
@@ -887,6 +888,7 @@ fn main() {
                     Crust::cleanup();
                     let _ = Command::new("prism").args(&args).status();
                     Crust::init();
+                    Crust::set_app_identity("fleet");
                     Crust::clear_screen();
                     let (c, r) = Crust::terminal_size();
                     cols = c;
