@@ -23,6 +23,7 @@ pub struct WinMap {
     atom_wm_desktop: Atom,
     atom_current_desktop: Atom,
     atom_active: Atom,
+    atom_open_on: Atom,
 }
 
 impl WinMap {
@@ -35,6 +36,7 @@ impl WinMap {
         let atom_wm_desktop = intern(&conn, b"_NET_WM_DESKTOP")?;
         let atom_current_desktop = intern(&conn, b"_NET_CURRENT_DESKTOP")?;
         let atom_active = intern(&conn, b"_NET_ACTIVE_WINDOW")?;
+        let atom_open_on = intern(&conn, b"_TILE_OPEN_ON")?;
         Some(WinMap {
             conn,
             root,
@@ -43,6 +45,7 @@ impl WinMap {
             atom_wm_desktop,
             atom_current_desktop,
             atom_active,
+            atom_open_on,
         })
     }
 
@@ -162,6 +165,21 @@ impl WinMap {
     pub fn switch_desktop(&self, index: u32) {
         let ev = ClientMessageEvent::new(
             32, self.root, self.atom_current_desktop, [index, 0, 0, 0, 0]);
+        let _ = self.conn.send_event(
+            false, self.root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            ev,
+        );
+        let _ = self.conn.flush();
+    }
+
+    /// Ask tile to put the next window of process `pid` on workspace
+    /// `index` (0-based) and switch there once it is placed. Sent right
+    /// after the program starts: switching first showed the empty
+    /// workspace until the window came up. Needs tile v0.1.83 or later.
+    pub fn open_on(&self, index: u32, pid: u32) {
+        let ev = ClientMessageEvent::new(
+            32, self.root, self.atom_open_on, [index, pid, 0, 0, 0]);
         let _ = self.conn.send_event(
             false, self.root,
             EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,

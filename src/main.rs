@@ -1421,12 +1421,6 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     if let Some(pid) = s.pid {
         return format!("{} already runs (pid {}) with no window fleet can see", s.tag, pid);
     }
-    // Open on the tag's configured workspace: switch there first so tile
-    // maps the new glass on it (tile places new windows on the current
-    // workspace). No-op when the tag has no workspace set.
-    if let (Some(ws), Some(c)) = (pref.and_then(|p| p.ws), wm) {
-        c.switch_desktop(ws);
-    }
     // Through setsid: the new glass gets its own session and process
     // group, so quitting fleet (or closing the terminal fleet runs in)
     // no longer takes the resumed session down with it.
@@ -1488,7 +1482,16 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     // inherited stdin, quitting fleet left its glass black until every
     // session resumed from it had ended.
     match c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
-        Ok(_) => format!("resuming {} in a new glass", s.tag),
+        Ok(child) => {
+            // Open on the tag's configured workspace. tile places the
+            // glass there and switches only once it is on screen, so the
+            // empty workspace never shows. setsid execs glass in place,
+            // so the child's pid is the pid on glass's window.
+            if let (Some(ws), Some(w)) = (pref.and_then(|p| p.ws), wm) {
+                w.open_on(ws, child.id());
+            }
+            format!("resuming {} in a new glass", s.tag)
+        }
         Err(e) => format!("glass failed: {}", e),
     }
 }
