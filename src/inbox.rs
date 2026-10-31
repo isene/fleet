@@ -121,6 +121,24 @@ pub fn pending() -> Vec<LogEntry> {
     out
 }
 
+/// Open and close each message waiting for `tag`, changing nothing. A
+/// session that reads its own messages (deck under gluon) watches its
+/// mailbox for a file closed after writing, so this asks it to read them.
+pub fn nudge(tag: &str) -> usize {
+    let home = crate::config::home();
+    [".fleet/bus", ".fleet/relay"].iter().map(|r| nudge_in(&home.join(r).join(tag))).sum()
+}
+
+fn nudge_in(dir: &Path) -> usize {
+    let Ok(files) = std::fs::read_dir(dir) else { return 0 };
+    files
+        .flatten()
+        .filter(|f| !f.file_name().to_string_lossy().starts_with('.'))
+        .filter(|f| f.file_type().is_ok_and(|t| t.is_file()))
+        .filter(|f| std::fs::OpenOptions::new().append(true).open(f.path()).is_ok())
+        .count()
+}
+
 /// Tail of ~/.fleet/log: the delivered bus traffic, newest first.
 /// The hook appends deliveries; fleet appends phone-bound sends it sees.
 pub fn log_tail(n: usize) -> Vec<LogEntry> {
@@ -189,5 +207,28 @@ mod tests {
     fn a_phone_message_is_known_by_its_name() {
         assert!(super::from_phone(std::path::Path::new("/r/ci/1761270000-phone.msg")));
         assert!(!super::from_phone(std::path::Path::new("/b/ci/1761270000-fe2o3")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_nudge_fires_the_watch_and_keeps_the_message() {
+        let dir = std::env::temp_dir().join(format!("fleet-nudge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let msg = dir.join("note");
+        std::fs::write(&msg, "hi -- fe2o3").unwrap();
+        let before = std::fs::metadata(&msg).unwrap().modified().unwrap();
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK) };
+        let p = std::ffi::CString::new(dir.to_str().unwrap()).unwrap();
+        unsafe { libc::inotify_add_watch(fd, p.as_ptr(), libc::IN_CLOSE_WRITE) };
+        assert_eq!(super::nudge_in(&dir), 1);
+        let mut buf = [0u8; 256];
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        unsafe { libc::close(fd) };
+        let after = std::fs::metadata(&msg).unwrap().modified().unwrap();
+        let text = std::fs::read_to_string(&msg).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(n > 0, "no IN_CLOSE_WRITE");
+        assert_eq!(text, "hi -- fe2o3");
+        assert_eq!(after, before);
     }
 }

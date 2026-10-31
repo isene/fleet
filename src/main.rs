@@ -278,7 +278,8 @@ fn main() {
             .find(|s| s.tag == tag)
             .and_then(|s| s.pid);
         if pid.is_some_and(procs::wakes_itself) {
-            println!("{} reads its own messages", tag);
+            inbox::nudge(&tag);
+            println!("{} asked to read its messages", tag);
             return;
         }
         let xid = pid.and_then(|pid| sessions::window_ancestor(pid, &windows));
@@ -464,14 +465,16 @@ fn main() {
             let now_i = std::time::Instant::now();
             if now_i >= not_before {
                 // gluon reads its messages as they land; keys typed into
-                // its window would go to whatever pane has them.
+                // its window would go to whatever pane has them. A message
+                // already waiting is reopened, which its watch sees.
                 let pid = sess.iter().find(|s| s.tag == tag).and_then(|s| s.pid);
                 let own = pid.is_some_and(procs::wakes_itself);
                 let xid = pid.filter(|_| !own)
                     .and_then(|pid| wm.as_ref()
                         .and_then(|c| sessions::window_ancestor(pid, &c.pid_windows())));
                 if own {
-                    flash = format!("{} reads its own messages", tag);
+                    inbox::nudge(&tag);
+                    flash = format!("{} asked to read its messages", tag);
                     wake = None;
                 } else if let Some(x) = xid {
                     wm.as_ref().map(|c| c.type_line(x, WAKE_PROMPT));

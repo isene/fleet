@@ -28,7 +28,8 @@ What keeps you in charge:
 - auto-wake is set per session with `a`, at most 4 times in 30 minutes;
   a message from your phone wakes its session without it
 - gluon reads its own messages as they land, so fleet types nothing into
-  its window, where the keys would reach the wrong pane
+  its window, where the keys would reach the wrong pane; Enter on a
+  message to gluon reopens the file, which gluon's watch sees
 - a session gets its messages once per turn, so two sessions cannot keep
   answering each other
 - fleet never types into the window you are working in, unless the
