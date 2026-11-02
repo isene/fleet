@@ -184,6 +184,12 @@ and add it to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 
 When idle the hook is one stat of a usually absent directory.
 
+A phone message with a line that starts with `!` asks the session to run
+a command. The hook lets it through only when the command is one of that
+session's open moves, word for word (a move such as
+"`! /tmp/deploy.sh` uploads the pages"). Any other command reaches the
+session as a refusal. Messages from local sessions are not checked.
+
 The same hook can also run under `hooks.Stop`. A session that is already
 working then gets its messages when its turn ends, with no prompt from
 you. It delivers once per turn, so two sessions cannot keep answering
