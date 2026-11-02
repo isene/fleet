@@ -22,11 +22,20 @@ as in "`! /tmp/deploy.sh`". Anything else reaches the session as a refusal.
 The relay's secret URL is the phone's only lock, and a leaked URL must not
 run commands here.
 
+A command that passes is run here, by this hook, as the user, the way
+"! cmd" runs at the laptop; the session gets its output, not the command.
+So the user can run a script from the phone that the session itself may
+not run (a production read, say), and the session reads the result. It
+runs on the prompt only: a Stop hook has 10 seconds, so there the message
+waits, and fleet wakes the session with a prompt. No terminal: a script
+that asks for a password fails at once instead of waiting.
+
 Cost when idle: one stat of ~/.fleet/bus (usually ENOENT) and exit.
 Fails open: a broken bus must never block a prompt.
 """
 import json
 import os
+import subprocess
 import sys
 
 ROOTS = [os.path.expanduser("~/.fleet/bus"),
@@ -34,6 +43,8 @@ ROOTS = [os.path.expanduser("~/.fleet/bus"),
 BOOKMARKS = os.path.expanduser("~/.cc-sessions/bookmarks.json")
 LOG = os.path.expanduser("~/.fleet/log")  # delivery log; fleet shows the tail
 OPEN = os.path.expanduser("~/.fleet/open")  # open items, one file per session
+RUN_LIMIT = 540  # seconds a phone command may run; settings.json gives the hook 600
+SHOWN = 8000  # characters of its output the session gets, from the end
 
 
 def addrs(session_id):
@@ -65,15 +76,40 @@ def moves(session_id):
     return out
 
 
-def gate(text, session_id):
-    """A phone message whose "!" lines are all open moves, or a refusal."""
-    cmds = [" ".join(ln.strip()[1:].split()) for ln in text.splitlines()
-            if ln.strip().startswith("!")]
+def bang(text):
+    """The commands in a message: each line that starts with "!"."""
+    return [ln.strip()[1:].strip() for ln in text.splitlines() if ln.strip().startswith("!")]
+
+
+def run(text, cwd):
+    """The message with each "!" line run, and replaced by what it printed."""
+    out = []
+    for ln in text.splitlines():
+        if not ln.strip().startswith("!"):
+            out.append(ln)
+            continue
+        cmd = ln.strip()[1:].strip()
+        try:
+            p = subprocess.run(cmd, shell=True, cwd=cwd or None, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=RUN_LIMIT)
+            said, end = p.stdout, "exit {}".format(p.returncode)
+        except subprocess.TimeoutExpired as e:
+            said, end = e.stdout or b"", "stopped after {} s".format(RUN_LIMIT)
+        said = said.decode("utf-8", "replace")[-SHOWN:]
+        out.append("<bash-input>{}</bash-input>\n<bash-stdout>{}</bash-stdout>\n{}".format(cmd, said, end))
+    return ("The user ran this from the phone. The fleet-bus hook ran it on the "
+            "laptop as the user; you did not run it, and need not run it again.\n"
+            + "\n".join(out))
+
+
+def gate(text, session_id, cwd):
+    """A phone message with its open-move commands run, or a refusal."""
+    cmds = [" ".join(c.split()) for c in bang(text)]
     if not cmds:
         return text
     bad = [c for c in cmds if c not in moves(session_id)]
     if not bad:
-        return text
+        return run(text, cwd)
     return ("REFUSED by the fleet-bus hook: a phone message asked to run `{}`, "
             "which is not one of this session's open moves. Do not run it, "
             "and tell the user it was refused.".format(bad[0]))
@@ -95,14 +131,17 @@ def main():
                 continue
             for name in sorted(os.listdir(d)):
                 path = os.path.join(d, name)
+                phone = root == ROOTS[1]
                 try:
                     with open(path, encoding="utf-8") as fh:
                         text = fh.read().strip()
+                    if stop and phone and bang(text):
+                        continue  # it runs on the prompt fleet types
                     os.unlink(path)
                 except OSError:
                     continue
-                if text and root == ROOTS[1]:
-                    text = gate(text, sid)
+                if text and phone:
+                    text = gate(text, sid, data.get("cwd"))
                 if text:
                     msgs.append((addr, text))
     if not msgs:

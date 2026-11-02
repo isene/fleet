@@ -184,11 +184,15 @@ and add it to `~/.claude/settings.json` under `hooks.UserPromptSubmit`:
 
 When idle the hook is one stat of a usually absent directory.
 
-A phone message with a line that starts with `!` asks the session to run
-a command. The hook lets it through only when the command is one of that
-session's open moves, word for word (a move such as
-"`! /tmp/deploy.sh` uploads the pages"). Any other command reaches the
-session as a refusal. Messages from local sessions are not checked.
+A phone message with a line that starts with `!` runs a command on the
+laptop. The hook runs it only when the command is one of that session's
+open moves, word for word (a move such as
+"`! /tmp/deploy.sh` uploads the pages"), and hands the session its output
+and exit code. The session does not run it again. Any other command
+reaches the session as a refusal. A command may take up to 9 minutes, so
+give the hook `"timeout": 600`. At a turn's end the message waits for the
+next prompt, which fleet types. Messages from local sessions are not
+checked, and the bash guard keeps sessions from writing into the relay.
 
 The same hook can also run under `hooks.Stop`. A session that is already
 working then gets its messages when its turn ends, with no prompt from
