@@ -197,6 +197,17 @@ impl WinMap {
     /// focused or not. frame hands it to the window's owner, and glass
     /// accepts it. Printable ASCII only; false if a character had no key.
     pub fn type_line(&self, xid: u32, text: &str) -> bool {
+        self.keys(xid, text, 0xff0d)
+    }
+
+    /// Press one key in a window, with no Enter after it: Return or Escape
+    /// (0xff0d, 0xff1b) for a Claude Code dialog, "y" or "n" for deck's.
+    pub fn type_key(&self, xid: u32, sym: u32) -> bool {
+        self.keys(xid, "", sym)
+    }
+
+    /// Type `text`, then the key `last` after a beat.
+    fn keys(&self, xid: u32, text: &str, last: u32) -> bool {
         let setup = self.conn.setup();
         let (min, max) = (setup.min_keycode, setup.max_keycode);
         let map = match self.conn.get_keyboard_mapping(min, max - min + 1)
@@ -244,10 +255,10 @@ impl WinMap {
                 None => all = false,
             }
         }
-        // Enter as its own key after a beat, as the two xdotool runs did.
+        // The last key on its own after a beat, as the two xdotool runs did.
         std::thread::sleep(std::time::Duration::from_millis(50));
-        match key_for(0xff0d) {
-            Some((code, _)) => press(code, false),
+        match key_for(last) {
+            Some((code, shift)) => press(code, shift),
             None => all = false,
         }
         all

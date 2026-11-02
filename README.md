@@ -272,7 +272,13 @@ at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
   a Notification hook with the matcher `permission_prompt` that runs
   `fleet --hook`. The hook also marks the dialog in `~/.fleet/ask/`, and
   the session list carries it as `ask` while the session still stops at
-  that call; the turn's end removes the mark.
+  that call; the turn's end removes the mark. With one call waiting, the
+  mark and the list's `ask` also hold that call in full, as `full`, so
+  the phone can show a long command whole before Allow.
+- The phone answers a dialog with the message `allow <call>` or
+  `deny <call>`. fleet takes it out of the relay and presses one key in
+  the session's window: Return or Escape, or `y` or `n` under deck. It
+  presses nothing unless the session still waits on that same call.
 
 `server/fleet-mcp.py` serves them: a GET with `?done=SINCE&wait=SECS`
 answers with the turns finished after SINCE, waiting up to 80 seconds

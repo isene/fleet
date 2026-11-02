@@ -48,6 +48,11 @@ mod os {
             .and_then(|v| v.trim().parse().ok())
     }
 
+    /// True when deck runs this Claude: it answers a dialog with y or n.
+    pub fn under_deck(pid: u32) -> bool {
+        ppid(pid).is_some_and(|p| comm(p) == "deck")
+    }
+
     /// True when the session reads its fleet messages without being typed
     /// to: deck under gluon starts Claude with FLEET_SELF_WAKE=1.
     pub fn wakes_itself(pid: u32) -> bool {
@@ -177,6 +182,10 @@ mod os {
         false
     }
 
+    pub fn under_deck(pid: u32) -> bool {
+        ppid(pid).is_some_and(|p| name(p) == "deck")
+    }
+
     pub fn children(pid: u32) -> Vec<(u32, String)> {
         pid_list(|b, n| unsafe { libc::proc_listchildpids(pid as libc::pid_t, b, n) })
             .into_iter()
@@ -185,7 +194,7 @@ mod os {
     }
 }
 
-pub use os::{alive, children, claude_pids, cwd, ppid, wakes_itself};
+pub use os::{alive, children, claude_pids, cwd, ppid, under_deck, wakes_itself};
 
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {

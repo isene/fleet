@@ -21,7 +21,9 @@
 //! Notification hook. It goes out as kind "ask", with the tool and what it
 //! wants to run, so the phone rings for a session that waits on you. The
 //! hook also marks it in ~/.fleet/ask/<session id>, which the session list
-//! carries to the phone, where Allow and Deny answer it.
+//! carries to the phone, where Allow and Deny answer it. With one call
+//! waiting, the mark also holds that call in full, for the phone's
+//! confirm: a long or many-line command shows whole before Allow.
 //!
 //! Battery: two small file writes per finished answer, never on a timer,
 //! and no event without a relay folder. The files lie beside the tag
@@ -101,9 +103,10 @@ fn ask_in(home: &Path, v: &Value, now: u64, tags: &str) {
     // One call waits: the phone may answer it. With more, or none found,
     // it only rings, and the dialog is answered on the laptop.
     let call = if calls.len() == 1 { calls[0].0.clone() } else { String::new() };
+    let full = if calls.len() == 1 { calls[0].2.clone() } else { String::new() };
     let line = match calls.first() {
-        Some((_, l)) if calls.len() > 1 => format!("{} and {} more", l, calls.len() - 1),
-        Some((_, l)) => l.clone(),
+        Some((_, l, _)) if calls.len() > 1 => format!("{} and {} more", l, calls.len() - 1),
+        Some((_, l, _)) => l.clone(),
         None => plain(v["message"].as_str().unwrap_or("Waits for your yes")),
     };
     let line = cut(&line, 200);
@@ -111,7 +114,7 @@ fn ask_in(home: &Path, v: &Value, now: u64, tags: &str) {
     let dir = home.join(".fleet/ask");
     let tmp = dir.join(format!(".{}.tmp", id));
     let _ = std::fs::create_dir_all(&dir);
-    if std::fs::write(&tmp, format!("{}\t{}\n", call, line)).is_ok() {
+    if std::fs::write(&tmp, format!("{}\t{}\n{}", call, line, full)).is_ok() {
         let _ = std::fs::rename(&tmp, dir.join(&id));
     }
     put(&relay, &tag_of(tags, &id), "ask", "", &line, now);
@@ -125,16 +128,25 @@ pub fn ask_dir() -> PathBuf {
 /// about (empty when more than one waits) and what that call runs.
 pub fn ask_mark(id: &str) -> Option<(String, String)> {
     let t = std::fs::read_to_string(ask_dir().join(safe(id))).ok()?;
-    let (call, line) = t.trim_end().split_once('\t')?;
+    let (call, line) = t.lines().next()?.split_once('\t')?;
     Some((call.to_string(), line.to_string()))
 }
 
+/// The whole call a session's dialog asks about, as the mark keeps it
+/// below its first line; empty when more than one call waits.
+fn ask_full(home: &Path, id: &str) -> String {
+    std::fs::read_to_string(home.join(".fleet/ask").join(safe(id))).ok()
+        .and_then(|t| t.split_once('\n').map(|(_, rest)| rest.trim_end().to_string()))
+        .unwrap_or_default()
+}
+
 /// The tool calls still waiting for a result, oldest first, each with
-/// what it runs ("Bash: git push", "Edit: src/main.rs"), from the
-/// transcript's last 64 KB. A prompt of the user's starts a new turn.
-pub fn pending(transcript: &Path) -> Vec<(String, String)> {
+/// what it runs ("Bash: git push", "Edit: src/main.rs") and that call in
+/// full, from the transcript's last 64 KB. A prompt of the user's starts
+/// a new turn.
+pub fn pending(transcript: &Path) -> Vec<(String, String, String)> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut out: Vec<(String, String)> = Vec::new();
+    let mut out: Vec<(String, String, String)> = Vec::new();
     let Ok(mut f) = std::fs::File::open(transcript) else { return out };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut buf = Vec::new();
@@ -151,14 +163,14 @@ pub fn pending(transcript: &Path) -> Vec<(String, String)> {
                 .filter_map(|b| b["tool_use_id"].as_str())
                 .collect();
             if !results.is_empty() {
-                out.retain(|(id, _)| !results.contains(&id.as_str()));
+                out.retain(|(id, _, _)| !results.contains(&id.as_str()));
             } else if content.is_string() || blocks.iter().any(|b| b["type"] == "text") {
                 out.clear();
             }
         } else if v["type"] == "assistant" {
             for b in blocks.iter().filter(|b| b["type"] == "tool_use") {
                 if let Some(id) = b["id"].as_str() {
-                    out.push((id.to_string(), call_line(b)));
+                    out.push((id.to_string(), call_line(b), call_full(b)));
                 }
             }
         }
@@ -174,6 +186,17 @@ fn call_line(b: &Value) -> String {
         .or_else(|| input.as_object()?.values().find_map(|v| v.as_str()))
         .unwrap_or("");
     plain(&format!("{}: {}", b["name"].as_str().unwrap_or("?"), what.lines().next().unwrap_or("")))
+}
+
+/// The call in full, for the phone to show before Allow: a command whole,
+/// any other tool's input as JSON. At most 4000 characters.
+fn call_full(b: &Value) -> String {
+    let input = &b["input"];
+    let what = match input["command"].as_str() {
+        Some(c) => c.to_string(),
+        None => serde_json::to_string_pretty(input).unwrap_or_default(),
+    };
+    cut(&format!("{}: {}", b["name"].as_str().unwrap_or("?"), what), 4000)
 }
 
 /// The session's tag: its first bookmark tag, else its id's start.
@@ -266,7 +289,8 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
         json!({"tag": s.tag, "auto": auto.contains(&s.tag), "state": s.state.label(),
                "eta": s.eta, "ws": s.ws.map(|w| w + 1), "model": s.model,
                "prompt": cut(&s.prompt, 200), "moves": moves,
-               "ask": s.ask.as_ref().map(|(call, line)| json!({"call": call, "line": line})),
+               "ask": s.ask.as_ref().map(|(call, line)| json!({"call": call, "line": line,
+                                                               "full": ask_full(home, &s.id)})),
                "at": now.saturating_sub(s.age_secs), "ctx": s.ctx_k})
     }).collect();
     let tmp = relay.join(".sessions.tmp");
@@ -477,9 +501,12 @@ mod tests {
         // A dialog comes up: written again, with what it asks.
         let mut asking = one(crate::sessions::State::Yours, 0);
         asking.ask = Some(("toolu_1".into(), "Bash: git push".into()));
+        std::fs::create_dir_all(home.join(".fleet/ask")).unwrap();
+        std::fs::write(home.join(".fleet/ask/s"), "toolu_1\tBash: git push\nBash: git push\n  --force\n").unwrap();
         publish_in(&home, &[asking], &HashSet::new(), &Value::Null, 170, &mut last);
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(v["sessions"][0]["ask"], json!({"call": "toolu_1", "line": "Bash: git push"}));
+        assert_eq!(v["sessions"][0]["ask"], json!({"call": "toolu_1", "line": "Bash: git push",
+                                                    "full": "Bash: git push\n  --force"}));
         // The weekly use moves: written again, beside the sessions.
         let mut asking = one(crate::sessions::State::Yours, 0);
         asking.ask = Some(("toolu_1".into(), "Bash: git push".into()));
@@ -523,7 +550,10 @@ mod tests {
         assert_eq!((e["kind"].as_str(), e["line"].as_str(), e["t"].as_u64()),
                    (Some("ask"), Some("Bash: git push origin master"), Some(7)));
         // The mark the list reads: the one call that waits.
-        assert_eq!(std::fs::read_to_string(home.join(".fleet/ask/abc")).unwrap(), "b1\tBash: git push origin master\n");
+        assert_eq!(std::fs::read_to_string(home.join(".fleet/ask/abc")).unwrap(),
+                   "b1\tBash: git push origin master\nBash: git push origin master\nmore");
+        // The phone's confirm gets the command whole, both lines.
+        assert_eq!(ask_full(&home, "abc"), "Bash: git push origin master\nmore");
         // The turn ends: the mark goes.
         note_in(&home, &json!({"session_id": "abc", "last_assistant_message": "Pushed."}), 9, "ci");
         assert!(!home.join(".fleet/ask/abc").exists());
@@ -543,10 +573,11 @@ mod tests {
         let prompt = r#"{"type":"user","message":{"content":"go on"}}"#;
         let write = |lines: &[String]| std::fs::write(&log, lines.join("\n") + "\n").unwrap();
         write(&[use_("a", "ls"), result("a"), use_("b", "rm x"), use_("c", "git push")]);
-        assert_eq!(pending(&log), [("b".to_string(), "Bash: rm x".to_string()), ("c".into(), "Bash: git push".into())]);
+        let two = |v: Vec<(String, String, String)>| v.into_iter().map(|(i, l, _)| (i, l)).collect::<Vec<_>>();
+        assert_eq!(two(pending(&log)), [("b".to_string(), "Bash: rm x".to_string()), ("c".into(), "Bash: git push".into())]);
         // A call left without a result in an old turn waits no more.
         write(&[use_("a", "ls"), prompt.into(), use_("d", "make")]);
-        assert_eq!(pending(&log), [("d".to_string(), "Bash: make".to_string())]);
+        assert_eq!(two(pending(&log)), [("d".to_string(), "Bash: make".to_string())]);
         let _ = std::fs::remove_file(&log);
         assert!(pending(&log).is_empty());
     }

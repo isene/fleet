@@ -386,7 +386,36 @@ fn main() {
                 }
             }
         }
-        let logs = inbox::pending();
+        let mut logs = inbox::pending();
+        // The phone's Allow or Deny on a permission dialog presses one key
+        // in that session's window, and only while the same call still
+        // waits there. The message is used up here either way, so the
+        // session never reads it, and a late answer presses nothing.
+        let relay = config::home().join(".fleet/relay");
+        logs.retain(|e| {
+            let Some(path) = e.path.as_deref() else { return true };
+            if !path.starts_with(&relay) || !inbox::from_phone(path) {
+                return true;
+            }
+            let Some((allow, call)) = dialog_answer(&e.text) else { return true };
+            let _ = std::fs::remove_file(path);
+            let s = sess.iter().find(|s| s.tag == e.dest);
+            let waits = s.is_some_and(|s| s.ask.as_ref().is_some_and(|(c, _)| !c.is_empty() && c == call));
+            // gluon's own sessions read keys in whatever pane has them.
+            let pid = s.and_then(|s| s.pid).filter(|p| waits && !procs::wakes_itself(*p));
+            let done = pid.zip(wm.as_ref()).is_some_and(|(pid, c)| {
+                sessions::window_ancestor(pid, &c.pid_windows())
+                    .is_some_and(|x| c.type_key(x, dialog_key(allow, procs::under_deck(pid))))
+            });
+            let word = if allow { "allowed" } else { "denied" };
+            flash = if done {
+                log_append(&e.dest, &format!("{} from the phone: {}", word, call));
+                format!("{} {} from the phone", e.dest, word)
+            } else {
+                format!("{}: the phone's answer found no dialog waiting", e.dest)
+            };
+            false
+        });
         // Keep a flag as long as its file is still an inbox item or a
         // pending message; a delivered message drops its flag with it.
         marked.retain(|p| {
@@ -1967,6 +1996,31 @@ fn hang(text: &str, indent: usize, width: usize) -> Vec<String> {
     lines
 }
 
+/// The phone's answer to a permission dialog: "allow <call>" or "deny
+/// <call>", which the relay server signs "/phone". True for allow.
+fn dialog_answer(text: &str) -> Option<(bool, &str)> {
+    let w: Vec<&str> = text.split_whitespace().collect();
+    let allow = match w.first() {
+        Some(&"allow") => true,
+        Some(&"deny") => false,
+        _ => return None,
+    };
+    let call = *w.get(1)?;
+    let id = call.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    (id && w[2..].iter().all(|s| *s == "/phone") && w.len() <= 3).then_some((allow, call))
+}
+
+/// The key that answers a dialog. deck asks "y" or "n"; Claude Code's
+/// first choice is Yes, so Return allows and Escape denies.
+fn dialog_key(allow: bool, deck: bool) -> u32 {
+    match (deck, allow) {
+        (true, true) => 'y' as u32,
+        (true, false) => 'n' as u32,
+        (false, true) => 0xff0d,
+        (false, false) => 0xff1b,
+    }
+}
+
 /// Append one line to the bus log. Fleet logs only phone-bound sends it
 /// observes; deliveries are logged by the receiving hook, so each
 /// message lands in the log exactly once.
@@ -2148,6 +2202,31 @@ mod paint_tests {
         remember(&mut map, inbox_3, "e");
         assert_eq!(map.get(&inbox_3).map(String::as_str), Some("e"));
         assert_eq!(map.len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_plain_answer_from_the_phone_counts() {
+        assert_eq!(dialog_answer("allow toolu_01Ab-c /phone"), Some((true, "toolu_01Ab-c")));
+        assert_eq!(dialog_answer("deny toolu_9"), Some((false, "toolu_9")));
+        // Anything more is a message for the session, not an answer.
+        assert_eq!(dialog_answer("allow toolu_9 and push"), None);
+        assert_eq!(dialog_answer("allow toolu_9; rm -rf ~ /phone"), None);
+        assert_eq!(dialog_answer("allow"), None);
+        assert_eq!(dialog_answer("Allow toolu_9"), None);
+        assert_eq!(dialog_answer("please allow toolu_9"), None);
+    }
+
+    #[test]
+    fn deck_takes_letters_and_claude_code_takes_return_or_escape() {
+        assert_eq!(dialog_key(true, true), 0x79);
+        assert_eq!(dialog_key(false, true), 0x6e);
+        assert_eq!(dialog_key(true, false), 0xff0d);
+        assert_eq!(dialog_key(false, false), 0xff1b);
     }
 }
 
