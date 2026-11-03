@@ -128,7 +128,7 @@ work on Linux only.
 - `v` popup with your open items, from all sessions: what each one
   still waits for you to do or decide, with its age and its number.
   The header counts them. Up and Down move the bar, Enter jumps to
-  that row's session, and `d` deletes the item under the bar. See
+  that row's session, and `D` deletes the item under the bar. See
   [Open items](#open-items)
 - `/` search what every session has said: your prompts and Claude's
   answers, old sessions too. Type one word or several; a message is

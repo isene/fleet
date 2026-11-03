@@ -1686,7 +1686,7 @@ impl Over {
 
 /// What every session waits for the user to do or decide, in a popup:
 /// its open items, each with the number the user answers by. Up/Down
-/// move the bar, Enter goes to the session under it, and d deletes the
+/// move the bar, Enter goes to the session under it, and D deletes the
 /// item under it, for one its session never closed.
 struct Moves {
     pop: Popup,
@@ -1774,7 +1774,8 @@ impl Moves {
             "PgDOWN" | " " => self.at = (at + page).min(last),
             "HOME" | "g" => self.at = 0,
             "END" | "G" => self.at = last,
-            "d" => {
+            // D, since d flags for deletion everywhere else.
+            "D" => {
                 if let Some(&(i, num)) = self.owner.get(at) {
                     open::delete(&sess[i].id, num);
                     // Land on the first row of what moves up into its place.
@@ -2134,7 +2135,7 @@ fn help() -> Over {
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
     t.push_str(&format!("{}dim on idle for all sessions, on or off\n", key("I")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
-    t.push_str(&format!("{}open items; Enter jumps to one, d deletes it\n", key("v")));
+    t.push_str(&format!("{}open items; Enter jumps to one, D deletes it\n", key("v")));
     t.push_str(&format!("{}search what every session has said\n", key("/")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
