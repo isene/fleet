@@ -340,6 +340,11 @@ While nothing changes it writes nothing. Another server's sites can be
 checked with `url` and `cert`, so one server watches the other; the
 phone app sees by itself when the relay host is gone.
 
+Each run also adds one line to `~/.checkup.log` for a dashboard's
+graphs: the time, then `name=value=why` per check, tab apart. The value
+is the page's answer time in ms, the disk's percent, the certificate's
+days or the file's hours. Past 16 MB the older half goes.
+
 ```
 */5 * * * * flock -n /tmp/checkup.lock python3 ~/fleet/server/checkup.py
 ```

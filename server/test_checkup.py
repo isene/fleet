@@ -29,7 +29,7 @@ def test_each_kind_says_what_is_wrong(tmp_path):
     old = tmp_path / "old"
     old.write_text("")
     os.utime(old, (time.time() - 30 * 3600,) * 2)
-    got = cu.run(
+    got, value = cu.run(
         [
             "disk root / 100",
             "disk tight / 0",
@@ -53,6 +53,8 @@ def test_each_kind_says_what_is_wrong(tmp_path):
     assert "refused" in got["nowhere"]
     assert got["broken"].startswith("bad line")
     assert "nonsense" not in got and "line" not in got
+    assert 0 <= value["root"] <= 100 and value["stale"] == 30.0
+    assert value["me"] is None and value["nowhere"] is None
     p.kill()
 
 
@@ -60,6 +62,7 @@ def test_only_a_change_rings(tmp_path, monkeypatch):
     rc = tmp_path / ".checkup"
     monkeypatch.setattr(cu, "LIST", rc)
     monkeypatch.setattr(cu, "OUT", tmp_path)
+    monkeypatch.setattr(cu, "LOG", tmp_path / "log")
     monkeypatch.setattr(cu, "HOST", "box")
     event = tmp_path / "done-server-box.json"
     view = tmp_path / "server-box.json"
@@ -83,3 +86,15 @@ def test_only_a_change_rings(tmp_path, monkeypatch):
     cu.main()
     p.kill()
     assert json.loads(event.read_text())["line"] == "box: ghost works again"
+
+
+def test_each_run_adds_a_line_and_the_log_stays_small(tmp_path, monkeypatch):
+    log = tmp_path / "log"
+    monkeypatch.setattr(cu, "LOG", log)
+    cu.log(100, {"disk": "", "web": "timed\tout\nnow"}, {"disk": 41, "web": None})
+    assert log.read_text() == "100\tdisk=41=\tweb==timed out now\n"
+    monkeypatch.setattr(cu, "LOG_MAX", 100)
+    for t in range(101, 111):
+        cu.log(t, {"disk": ""}, {"disk": 41})
+    lines = log.read_text().splitlines()
+    assert len(lines) < 11 and lines[-1] == "110\tdisk=41="
