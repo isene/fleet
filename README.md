@@ -119,6 +119,11 @@ work on Linux only.
   When a bus message lands for it, fleet asks it to check its messages
   by itself. Only while Claude waits at its prompt, never in the window
   you are typing in, and at most 4 times in 30 minutes
+- `i` dim on idle for the selected session, on or off. deck dims its
+  glass to 20% when a turn ends, until you press a key in it, so the
+  sessions that wait for you stand out. `I` sets it for all sessions,
+  and `i` sets one apart. Saved to `~/.fleetrc` as `dim off` and
+  `dim <tag> on|off`; deck reads them when a turn ends
 - `c` today's token rollup per session (Esc back)
 - `v` popup with your open items, from all sessions: what each one
   still waits for you to do or decide, with its age and its number.

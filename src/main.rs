@@ -811,6 +811,33 @@ fn main() {
                     config::write_autowake(&cfg.autowake);
                 }
             }
+            Some("i") if focus == Focus::Sessions => {
+                // Dim on idle for this session: deck dims its glass to 20%
+                // when a turn ends, so the sessions that wait stand out.
+                // Pressed again it goes back to what I sets for all.
+                if let Some(s) = sess.get(sel_s) {
+                    let tag = s.tag.clone();
+                    let on = !cfg.dim_tags.get(&tag).copied().unwrap_or(cfg.dim);
+                    flash = if !s.tagged {
+                        format!("{} has no bookmark, so only I sets it", tag)
+                    } else {
+                        if on == cfg.dim {
+                            cfg.dim_tags.remove(&tag);
+                        } else {
+                            cfg.dim_tags.insert(tag.clone(), on);
+                        }
+                        config::write_dim(cfg.dim, &cfg.dim_tags);
+                        format!("{} dims on idle: {}", tag, if on { "on" } else { "off" })
+                    };
+                }
+            }
+            Some("I") => {
+                cfg.dim = !cfg.dim;
+                config::write_dim(cfg.dim, &cfg.dim_tags);
+                let apart = cfg.dim_tags.values().filter(|on| **on != cfg.dim).count();
+                flash = format!("dim on idle {} for all sessions ({} set apart with i)",
+                                if cfg.dim { "on" } else { "off" }, apart);
+            }
             Some("p") if focus == Focus::Sessions => {
                 // Park a session, or wake it from parking. A parked one
                 // stays in the list, out of the counts and up at the top,
@@ -2089,6 +2116,7 @@ fn help() -> Over {
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
     t.push_str(&format!("{}park it: listed, uncounted, up top\n", key("p")));
     t.push_str(&format!("{}auto-wake: check messages by itself (»)\n", key("a")));
+    t.push_str(&format!("{}dim its glass when a turn ends, on or off\n", key("i")));
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its colour: deck's pane, else glass (prism)\n", key("b")));
@@ -2104,6 +2132,7 @@ fn help() -> Over {
     t.push_str(&format!("{}select\n", key("↑ ↓")));
     t.push_str(&format!("{}delete everything flagged\n", key("<")));
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
+    t.push_str(&format!("{}dim on idle for all sessions, on or off\n", key("I")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
     t.push_str(&format!("{}open items; Enter jumps to one, d deletes it\n", key("v")));
     t.push_str(&format!("{}search what every session has said\n", key("/")));

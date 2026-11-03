@@ -9,6 +9,9 @@
 //!                                  of it, like the CC statusline
 //!   autowake <tag>                 fleet asks this session to check its
 //!                                  messages as soon as one lands (key a)
+//!   dim off                        deck leaves its glass bright when a
+//!                                  turn ends (default: it dims to 20%; key I)
+//!   dim <tag> on|off               the same for one session (key i)
 //!   parked <tag>                   a session to leave alone: listed, but
 //!                                  not counted and sorted to the bottom
 //!   session <tag> <ws> [bg]        where a resumed session's glass opens
@@ -52,6 +55,10 @@ pub struct Config {
     pub parked: HashSet<String>,
     /// Sessions fleet wakes by itself when a bus message lands for them.
     pub autowake: HashSet<String>,
+    /// deck dims its glass when a turn ends: for all sessions, and for
+    /// the ones set apart from that.
+    pub dim: bool,
+    pub dim_tags: HashMap<String, bool>,
 }
 
 /// A 1-based workspace field from the config ('-' = none) to 0-based.
@@ -88,6 +95,8 @@ impl Config {
             session_prefs: HashMap::new(),
             parked: HashSet::new(),
             autowake: HashSet::new(),
+            dim: true,
+            dim_tags: HashMap::new(),
         };
         let mut have_inbox = false;
         if let Ok(text) = std::fs::read_to_string(home().join(".fleetrc")) {
@@ -120,6 +129,10 @@ impl Config {
                     }
                     ["autowake", tag] => {
                         cfg.autowake.insert(tag.to_string());
+                    }
+                    ["dim", v] => cfg.dim = *v != "off",
+                    ["dim", tag, v] => {
+                        cfg.dim_tags.insert(tag.to_string(), *v != "off");
                     }
                     ["session", tag, ws] => {
                         cfg.session_prefs.entry(tag.to_string()).or_default().ws = parse_ws(ws);
@@ -194,7 +207,27 @@ pub fn write_autowake(tags: &HashSet<String>) {
     write_tags("autowake", tags);
 }
 
-fn write_tags(key: &str, parked: &HashSet<String>) {
+/// The `dim` lines, written when `i` or `I` changes one: `dim off` while
+/// no session dims by default, then each session set apart.
+pub fn write_dim(all: bool, tags: &HashMap<String, bool>) {
+    let mut lines: Vec<String> = tags.iter()
+        .map(|(t, on)| format!("dim {} {}", t, if *on { "on" } else { "off" }))
+        .collect();
+    lines.sort();
+    if !all {
+        lines.insert(0, "dim off".into());
+    }
+    write_lines("dim", lines);
+}
+
+fn write_tags(key: &str, tags: &HashSet<String>) {
+    let mut tags: Vec<&String> = tags.iter().collect();
+    tags.sort();
+    write_lines(key, tags.iter().map(|t| format!("{} {}", key, t)).collect());
+}
+
+/// Swap every `key` line in ~/.fleetrc for `new`, keeping the rest.
+fn write_lines(key: &str, new: Vec<String>) {
     let path = home().join(".fleetrc");
     let mut lines: Vec<String> = std::fs::read_to_string(&path)
         .map(|t| t.lines().map(String::from).collect())
@@ -203,11 +236,7 @@ fn write_tags(key: &str, parked: &HashSet<String>) {
         let f: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
         !(f.len() >= 2 && f[0] == key)
     });
-    let mut tags: Vec<&String> = parked.iter().collect();
-    tags.sort();
-    for t in tags {
-        lines.push(format!("{} {}", key, t));
-    }
+    lines.extend(new);
     let tmp = path.with_extension("fleetrc.tmp");
     let body = lines.join("\n") + "\n";
     if std::fs::write(&tmp, body).is_ok() {
@@ -262,6 +291,28 @@ mod title_tests {
         let text = std::fs::read_to_string(dir.join(".fleetrc")).unwrap();
         assert!(!text.contains("title"), "{text}");
         assert!(text.contains("parked x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod dim_tests {
+    use super::*;
+
+    #[test]
+    fn the_dim_lines_survive_a_write_and_a_load() {
+        let (_lock, dir) = test_home("dim");
+        std::fs::write(dir.join(".fleetrc"), "parked x\ndim old on\n").unwrap();
+        assert!(Config::load().dim, "a session dims unless told not to");
+        let tags: HashMap<String, bool> = [("ci".to_string(), true), ("pf".to_string(), false)].into();
+        write_dim(false, &tags);
+        let text = std::fs::read_to_string(dir.join(".fleetrc")).unwrap();
+        assert_eq!(text, "parked x\ndim off\ndim ci on\ndim pf off\n");
+        let c = Config::load();
+        assert_eq!((c.dim, c.dim_tags), (false, tags));
+        // Back on for all, with nobody set apart: no dim line is left.
+        write_dim(true, &HashMap::new());
+        assert_eq!(std::fs::read_to_string(dir.join(".fleetrc")).unwrap(), "parked x\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
