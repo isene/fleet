@@ -67,7 +67,7 @@ that at a glance, in one TUI.
 **Inbox** (configurable watch folders):
 
 - Files that recently arrived, newest first
-- `o` opens the selected item, `D` deletes it (with confirm)
+- `o` opens the selected item, `d` flags it, `<` deletes what is flagged
 
 ## Install
 
@@ -119,17 +119,17 @@ work on Linux only.
   When a bus message lands for it, fleet asks it to check its messages
   by itself. Only while Claude waits at its prompt, never in the window
   you are typing in, and at most 4 times in 30 minutes
-- `i` dim on idle for the selected session, on or off. deck dims its
+- `D` dim on idle for the selected session, on or off. deck dims its
   glass to 20% once the session is idle (`idle_mins` after its turn
   ends), until you press a key in it. A session that has just answered
-  (YOURS) stays bright. `I` sets it for all sessions,
-  and `i` sets one apart. Saved to `~/.fleetrc` as `dim off` and
+  (YOURS) stays bright. Ctrl-D sets it for all sessions,
+  and `D` sets one apart. Saved to `~/.fleetrc` as `dim off` and
   `dim <tag> on|off`; deck reads them when a turn ends
 - `c` today's token rollup per session (Esc back)
 - `v` popup with your open items, from all sessions: what each one
   still waits for you to do or decide, with its age and its number.
   The header counts them. Up and Down move the bar, Enter jumps to
-  that row's session, and `D` deletes the item under the bar. See
+  that row's session, and `d` deletes the item under the bar. See
   [Open items](#open-items)
 - `/` search what every session has said: your prompts and Claude's
   answers, old sessions too. Type one word or several; a message is

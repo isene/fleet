@@ -11,8 +11,8 @@
 //!                                  messages as soon as one lands (key a)
 //!   dim off                        deck leaves its glass bright when a
 //!                                  session goes idle (default: it dims to
-//!                                  20% after idle_mins; key I)
-//!   dim <tag> on|off               the same for one session (key i)
+//!                                  20% after idle_mins; key Ctrl-D)
+//!   dim <tag> on|off               the same for one session (key D)
 //!   parked <tag>                   a session to leave alone: listed, but
 //!                                  not counted and sorted to the bottom
 //!   session <tag> <ws> [bg]        where a resumed session's glass opens

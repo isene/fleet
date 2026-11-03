@@ -811,15 +811,15 @@ fn main() {
                     config::write_autowake(&cfg.autowake);
                 }
             }
-            Some("i") if focus == Focus::Sessions => {
+            Some("D") if focus == Focus::Sessions => {
                 // Dim on idle for this session: deck dims its glass to 20%
-                // when a turn ends, so the sessions that wait stand out.
-                // Pressed again it goes back to what I sets for all.
+                // once the session is idle, so the busy ones stand out.
+                // Pressed again it goes back to what Ctrl-D sets for all.
                 if let Some(s) = sess.get(sel_s) {
                     let tag = s.tag.clone();
                     let on = !cfg.dim_tags.get(&tag).copied().unwrap_or(cfg.dim);
                     flash = if !s.tagged {
-                        format!("{} has no bookmark, so only I sets it", tag)
+                        format!("{} has no bookmark, so only Ctrl-D sets it", tag)
                     } else {
                         if on == cfg.dim {
                             cfg.dim_tags.remove(&tag);
@@ -831,11 +831,11 @@ fn main() {
                     };
                 }
             }
-            Some("I") => {
+            Some("C-D") => {
                 cfg.dim = !cfg.dim;
                 config::write_dim(cfg.dim, &cfg.dim_tags);
                 let apart = cfg.dim_tags.values().filter(|on| **on != cfg.dim).count();
-                flash = format!("dim on idle {} for all sessions ({} set apart with i)",
+                flash = format!("dim on idle {} for all sessions ({} set apart with D)",
                                 if cfg.dim { "on" } else { "off" }, apart);
             }
             Some("p") if focus == Focus::Sessions => {
@@ -1686,7 +1686,7 @@ impl Over {
 
 /// What every session waits for the user to do or decide, in a popup:
 /// its open items, each with the number the user answers by. Up/Down
-/// move the bar, Enter goes to the session under it, and D deletes the
+/// move the bar, Enter goes to the session under it, and d deletes the
 /// item under it, for one its session never closed.
 struct Moves {
     pop: Popup,
@@ -1774,8 +1774,7 @@ impl Moves {
             "PgDOWN" | " " => self.at = (at + page).min(last),
             "HOME" | "g" => self.at = 0,
             "END" | "G" => self.at = last,
-            // D, since d flags for deletion everywhere else.
-            "D" => {
+            "d" => {
                 if let Some(&(i, num)) = self.owner.get(at) {
                     open::delete(&sess[i].id, num);
                     // Land on the first row of what moves up into its place.
@@ -2117,7 +2116,7 @@ fn help() -> Over {
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
     t.push_str(&format!("{}park it: listed, uncounted, up top\n", key("p")));
     t.push_str(&format!("{}auto-wake: check messages by itself (»)\n", key("a")));
-    t.push_str(&format!("{}dim its glass when a turn ends, on or off\n", key("i")));
+    t.push_str(&format!("{}dim its glass once idle, on or off\n", key("D")));
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its colour: deck's pane, else glass (prism)\n", key("b")));
@@ -2133,9 +2132,9 @@ fn help() -> Over {
     t.push_str(&format!("{}select\n", key("↑ ↓")));
     t.push_str(&format!("{}delete everything flagged\n", key("<")));
     t.push_str(&format!("{}message log popup (all bus traffic)\n", key("M")));
-    t.push_str(&format!("{}dim on idle for all sessions, on or off\n", key("I")));
+    t.push_str(&format!("{}dim on idle for all sessions, on or off\n", key("C-D")));
     t.push_str(&format!("{}today's token rollup (Esc back)\n", key("c")));
-    t.push_str(&format!("{}open items; Enter jumps to one, D deletes it\n", key("v")));
+    t.push_str(&format!("{}open items; Enter jumps to one, d deletes it\n", key("v")));
     t.push_str(&format!("{}search what every session has said\n", key("/")));
     t.push_str(&format!("{}this help (Esc / q / Enter closes)\n", key("?")));
     t.push_str(&format!("{}quit", key("q")));
