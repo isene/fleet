@@ -10,7 +10,8 @@
 //!   autowake <tag>                 fleet asks this session to check its
 //!                                  messages as soon as one lands (key a)
 //!   dim off                        deck leaves its glass bright when a
-//!                                  turn ends (default: it dims to 20%; key I)
+//!                                  session goes idle (default: it dims to
+//!                                  20% after idle_mins; key I)
 //!   dim <tag> on|off               the same for one session (key i)
 //!   parked <tag>                   a session to leave alone: listed, but
 //!                                  not counted and sorted to the bottom
