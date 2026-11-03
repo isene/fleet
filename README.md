@@ -271,8 +271,8 @@ colours included, when the
 at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
 
 When the bus hook hands a session messages as its turn ends, the
-session answers again. The new answer then goes on top, and the one
-before stays below a dim line, so the phone shows both.
+session answers again. The phone then shows both: the first answer at
+the top, and the new one below a dim line.
 
 - An answer that gives an ETA ("ETA about 14:20", "ETA unknown", or a
   clock time after "about", "by" or "until", as in "finish at about

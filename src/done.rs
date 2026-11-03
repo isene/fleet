@@ -18,7 +18,7 @@
 //! answer screen: HyperList as the laptop shows it, colours included. A
 //! new turn replaces it. When the fleet-bus hook hands over messages as a
 //! turn ends, the session answers again; the bus hook marks that in
-//! ~/.fleet/keep, and the new answer goes on top with the one before kept
+//! ~/.fleet/keep, and the one before stays at the top, with the new answer
 //! below a dim line. A rewrite the style hook asks for replaces only the
 //! newest answer.
 //!
@@ -84,20 +84,25 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     put(&relay, &tag, kind, &eta, &first_line(text), now);
     // The turn has ended, so no dialog of it waits.
     let _ = std::fs::remove_file(home.join(".fleet/ask").join(&id));
-    // The whole answer, for the phone's answer screen, on top of the
-    // answers this turn must keep.
+    // The whole answer, for the phone's answer screen, below the answers
+    // this turn must keep. When all of them would be too long, the newest
+    // goes alone.
     let path = relay.join(format!("answer-{}.txt", tag));
     let earlier = kept(home, &id, &path, v["stop_hook_active"].as_bool().unwrap_or(false));
     let new = hyperlist(home, text);
-    let whole = if earlier.is_empty() { new } else { format!("{}\n{}\n{}", new.trim_end(), EARLIER, earlier) };
+    let whole = if earlier.is_empty() || earlier.chars().count() + new.chars().count() > 60_000 {
+        new
+    } else {
+        format!("{}\n{}\n{}", earlier.trim_end(), NEXT, new)
+    };
     let tmp = relay.join(format!(".answer-{}.tmp", tag));
     if std::fs::write(&tmp, cut(&whole, 60_000)).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
 }
 
-/// The line between an answer and the one before it, dim on the phone.
-const EARLIER: &str = "\x1b[38;5;240m── the answer before ──\x1b[0m";
+/// The line between an answer and the next one, dim on the phone.
+const NEXT: &str = "\x1b[38;5;240m── the next answer ──\x1b[0m";
 
 /// The answers of this turn that stay below the new one. A new turn keeps
 /// none. A turn the bus hook marked keeps all that `path` shows now; a
@@ -478,10 +483,10 @@ mod tests {
         std::fs::create_dir_all(home.join(".fleet/keep")).unwrap();
         std::fs::write(home.join(".fleet/keep/s-1"), "").unwrap();
         say("Second.", true);
-        assert_eq!(answer(), format!("Second.\n{}\nFirst.", EARLIER));
+        assert_eq!(answer(), format!("First.\n{}\nSecond.", NEXT));
         // The style hook sends the second back: the rewrite replaces it alone.
         say("Second, shorter.", true);
-        assert_eq!(answer(), format!("Second, shorter.\n{}\nFirst.", EARLIER));
+        assert_eq!(answer(), format!("First.\n{}\nSecond, shorter.", NEXT));
         // A rewrite with no answer kept is the newest alone.
         say("Third.", false);
         say("Third, shorter.", true);
