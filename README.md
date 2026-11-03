@@ -320,6 +320,30 @@ early when that number changes, with the number and the newest
 message's first line, so a red notice on the phone comes and goes with
 the messages at no extra request.
 
+## Server checks
+
+`server/checkup.py` checks the server it runs on, from cron every 5
+minutes, against a list in `~/.checkup`. One line per check:
+
+```
+proc   chat      weechat                      a running command line holds this text
+url    site      https://example.org/ Welcome the page loads and shows this text
+disk   disk      / 90                         the disk is at most this full, in percent
+cert   site-tls  example.org 14               the certificate has this many days left
+fresh  news      ~/news/*.pdf 26              the newest file is this many hours old at most
+```
+
+Each name is used once. When a check fails or works again, checkup
+writes `done-server-<host>.json` to the relay, an event of kind `alert`
+that the phone rings for, and `server-<host>.json` with every check.
+While nothing changes it writes nothing. Another server's sites can be
+checked with `url` and `cert`, so one server watches the other; the
+phone app sees by itself when the relay host is gone.
+
+```
+*/5 * * * * flock -n /tmp/checkup.lock python3 ~/fleet/server/checkup.py
+```
+
 ## Configuration
 
 `~/.fleetrc`, plain text, `#` comments. Any `inbox` line replaces the
