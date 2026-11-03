@@ -339,7 +339,9 @@ writes `done-server-<host>.json` to the relay, an event of kind `alert`
 that the phone rings for, and `server-<host>.json` with every check.
 While nothing changes it writes nothing. Another server's sites can be
 checked with `url` and `cert`, so one server watches the other; the
-phone app sees by itself when the relay host is gone.
+phone app sees by itself when the relay host is gone. When checkup on the
+relay host writes no log line for 20 minutes, `fleet-mcp.py` sends the
+phone an alert, and one more when the lines come again.
 
 Each run also adds one line to `~/.checkup.log` for a dashboard's
 graphs: the time, then `name=value=why` per check, tab apart. The value

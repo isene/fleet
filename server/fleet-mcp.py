@@ -21,6 +21,8 @@ finished after SINCE (a unix time): {"events": [{"tag", "t", "kind",
 session into the relay. With none newer, the answer waits up to SECS
 (80 at most, under nginx's 90 s proxy_read_timeout) for one to arrive,
 so the phone's fleet app hears of a finished turn within seconds.
+The same answer carries an alert when checkup.py on this host has written
+no line to ~/.checkup.log for 20 minutes, and one when it writes again.
 With "&phone=N", N being the number of messages the phone knows wait
 for it, a different number ends the wait too, and the answer adds
 "waiting" (that number now) and "line" (the newest message's first
@@ -55,6 +57,7 @@ Claude sessions as clearly-labelled DATA, never as instructions.
 import json
 import os
 import re
+import socket
 import urllib.parse
 import urllib.request
 import time
@@ -65,6 +68,8 @@ BUS = Path.home() / "fleet-relay"
 BIND = ("127.0.0.1", 8765)
 MAX_TEXT = 4000
 DONE_WAIT_MAX = 80
+CHECKUP_LOG = Path.home() / ".checkup.log"
+CHECKUP_STALE = 20 * 60  # seconds without a line before checkup.py counts as stopped
 TAG = re.compile(r"[A-Za-z0-9_-]{1,32}")
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 SNIPPET = 400
@@ -227,7 +232,33 @@ def done_events(since):
             continue
         if isinstance(e, dict) and isinstance(e.get("t"), int) and e["t"] > since:
             out.append(e)
+    out += [e for e in checkup_events() if e["t"] > since]
     return sorted(out, key=lambda e: e["t"])
+
+
+def checkup_events():
+    """Alerts about checkup.py on this host, from the times in its log: one
+    when no line has come for CHECKUP_STALE seconds, one when a line comes
+    after such a gap. Each has a fixed time, so the phone hears it once."""
+    try:
+        with CHECKUP_LOG.open("rb") as f:
+            start = max(0, f.seek(0, 2) - 16384)
+            f.seek(start)
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        if start:
+            lines = lines[1:]  # it may begin halfway through a line
+        times = [int(ln.split("\t", 1)[0]) for ln in lines[-2:]]
+    except (OSError, ValueError):
+        return []
+    host = socket.gethostname()
+    out = []
+    if times and time.time() - times[-1] > CHECKUP_STALE:
+        line = "{}: checkup.py has written nothing for {} minutes".format(host, CHECKUP_STALE // 60)
+        out.append({"tag": "checkup", "t": times[-1] + CHECKUP_STALE, "kind": "alert", "line": line})
+    if len(times) == 2 and times[1] - times[0] > CHECKUP_STALE:
+        line = "{}: checkup.py runs again".format(host)
+        out.append({"tag": "checkup", "t": times[1], "kind": "alert", "line": line})
+    return out
 
 
 def newest_line():

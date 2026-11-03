@@ -1,11 +1,19 @@
 """Tests for fleet-mcp. Run: pytest server/"""
 import importlib.util
 import subprocess
+
+import pytest
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("fleet_mcp", Path(__file__).with_name("fleet-mcp.py"))
 fm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fm)
+
+
+@pytest.fixture(autouse=True)
+def no_checkup_log(tmp_path, monkeypatch):
+    """This machine's own checkup log must not reach a test."""
+    monkeypatch.setattr(fm, "CHECKUP_LOG", tmp_path / "no.log")
 
 
 def test_a_tag_keeps_its_case(tmp_path, monkeypatch):
@@ -95,3 +103,26 @@ def test_the_answer_comes_over_http(tmp_path, monkeypatch):
         assert json.load(urllib.request.urlopen(base + "?done=0&wait=0&phone=0"))["waiting"] == 0
     finally:
         server.shutdown()
+
+
+def test_a_stopped_checkup_rings_once_and_its_return_too(tmp_path, monkeypatch):
+    log = tmp_path / ".checkup.log"
+    monkeypatch.setattr(fm, "BUS", tmp_path)
+    monkeypatch.setattr(fm, "CHECKUP_LOG", log)
+    monkeypatch.setattr(fm.socket, "gethostname", lambda: "relay")
+    gap = fm.CHECKUP_STALE
+    assert fm.done_events(0) == [], "no log: a host without checkup says nothing"
+    log.write_text("1000\tdisk=41=\n" + "x" * 20000 + "\n2000\tdisk=41=\n")
+    monkeypatch.setattr(fm.time, "time", lambda: 2000 + gap - 1)
+    assert fm.done_events(0) == [], "a line came in time"
+    monkeypatch.setattr(fm.time, "time", lambda: 2000 + gap + 1)
+    [e] = fm.done_events(0)
+    assert (e["kind"], e["t"]) == ("alert", 2000 + gap)
+    assert e["line"] == "relay: checkup.py has written nothing for 20 minutes"
+    assert fm.done_events(e["t"]) == [], "heard once"
+    back = 2000 + gap + 60
+    with log.open("a") as f:
+        f.write("{}\tdisk=41=\n".format(back))
+    monkeypatch.setattr(fm.time, "time", lambda: back + 5)
+    [e] = fm.done_events(2000 + gap)
+    assert (e["t"], e["line"]) == (back, "relay: checkup.py runs again")
