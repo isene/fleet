@@ -43,6 +43,7 @@ ROOTS = [os.path.expanduser("~/.fleet/bus"),
 BOOKMARKS = os.path.expanduser("~/.cc-sessions/bookmarks.json")
 LOG = os.path.expanduser("~/.fleet/log")  # delivery log; fleet shows the tail
 OPEN = os.path.expanduser("~/.fleet/open")  # open items, one file per session
+KEEP = os.path.expanduser("~/.fleet/keep")  # turns whose answer before must stay
 RUN_LIMIT = 540  # seconds a phone command may run; settings.json gives the hook 600
 SHOWN = 8000  # characters of its output the session gets, from the end
 
@@ -158,6 +159,14 @@ def main():
            "sessions or the fleet TUI):\n"
            + "\n".join(f"- {m}" for _, m in msgs))
     if stop:
+        # The session answers again, and fleet would put that answer in
+        # place of this one on the phone. The mark tells fleet to keep both.
+        try:
+            os.makedirs(KEEP, exist_ok=True)
+            safe = "".join(c for c in sid if c.isascii() and (c.isalnum() or c in "-_"))
+            open(os.path.join(KEEP, safe), "w").close()
+        except OSError:
+            pass
         json.dump({"decision": "block",
                    "reason": ctx + "\n\nDeal with these before you stop."},
                   sys.stdout)

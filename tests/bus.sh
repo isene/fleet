@@ -42,6 +42,10 @@ out=$(hook Stop)
 [ -z "$out" ] && [ -e "$HOME/.fleet/relay/$S/m" ] || { echo "wrong: Stop gave: $out"; wrong=1; }
 out=$(hook UserPromptSubmit)
 [[ $out == *"pages up"* ]] || { echo "wrong: the prompt after Stop gave: $out"; wrong=1; }
+# a turn that ends with a message leaves a mark, so fleet keeps the answer before
+printf 'hello\n' > "$HOME/.fleet/bus/$S/m"
+out=$(hook Stop)
+[[ $out == *"hello"* ]] && [ -e "$HOME/.fleet/keep/$S" ] || { echo "wrong: Stop with a message gave: $out"; wrong=1; }
 rm "$HOME/.fleet/open/$S"
 check relay "! $T/ok.sh" 'REFUSED'
 [ $wrong = 0 ] && echo "all cases right"

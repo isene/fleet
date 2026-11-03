@@ -270,6 +270,10 @@ colours included, when the
 [hyperlist-display](https://github.com/isene/hyperlist-display) hook is
 at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
 
+When the bus hook hands a session messages as its turn ends, the
+session answers again. The new answer then goes on top, and the one
+before stays below a dim line, so the phone shows both.
+
 - An answer that gives an ETA ("ETA about 14:20", "ETA unknown", or a
   clock time after "about", "by" or "until", as in "finish at about
   14:20") means work goes on after it. The first later answer with no

@@ -15,7 +15,12 @@
 //! read from ~/.fleet/eta.
 //!
 //! The whole answer goes beside it, as answer-<tag>.txt, for the phone's
-//! answer screen: HyperList as the laptop shows it, colours included.
+//! answer screen: HyperList as the laptop shows it, colours included. A
+//! new turn replaces it. When the fleet-bus hook hands over messages as a
+//! turn ends, the session answers again; the bus hook marks that in
+//! ~/.fleet/keep, and the new answer goes on top with the one before kept
+//! below a dim line. A rewrite the style hook asks for replaces only the
+//! newest answer.
 //!
 //! A permission dialog that stays up a few seconds fires Claude Code's
 //! Notification hook. It goes out as kind "ask", with the tool and what it
@@ -79,12 +84,37 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     put(&relay, &tag, kind, &eta, &first_line(text), now);
     // The turn has ended, so no dialog of it waits.
     let _ = std::fs::remove_file(home.join(".fleet/ask").join(&id));
-    // The whole answer, for the phone's answer screen: the newest only.
+    // The whole answer, for the phone's answer screen, on top of the
+    // answers this turn must keep.
     let path = relay.join(format!("answer-{}.txt", tag));
+    let earlier = kept(home, &id, &path, v["stop_hook_active"].as_bool().unwrap_or(false));
+    let new = hyperlist(home, text);
+    let whole = if earlier.is_empty() { new } else { format!("{}\n{}\n{}", new.trim_end(), EARLIER, earlier) };
     let tmp = relay.join(format!(".answer-{}.tmp", tag));
-    if std::fs::write(&tmp, cut(&hyperlist(home, text), 60_000)).is_ok() {
+    if std::fs::write(&tmp, cut(&whole, 60_000)).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
+}
+
+/// The line between an answer and the one before it, dim on the phone.
+const EARLIER: &str = "\x1b[38;5;240m── the answer before ──\x1b[0m";
+
+/// The answers of this turn that stay below the new one. A new turn keeps
+/// none. A turn the bus hook marked keeps all that `path` shows now; a
+/// rewrite keeps what the turn kept before it.
+fn kept(home: &Path, id: &str, path: &Path, more: bool) -> String {
+    let file = home.join(".fleet/kept").join(id);
+    if !more {
+        let _ = std::fs::remove_file(&file);
+        return String::new();
+    }
+    if std::fs::remove_file(home.join(".fleet/keep").join(id)).is_ok() {
+        let now = std::fs::read_to_string(path).unwrap_or_default();
+        let _ = std::fs::create_dir_all(home.join(".fleet/kept"));
+        let _ = std::fs::write(&file, &now);
+        return now;
+    }
+    std::fs::read_to_string(&file).unwrap_or_default()
 }
 
 /// A permission dialog that waits: the event the phone rings for.
@@ -433,6 +463,30 @@ mod tests {
         note_in(home, &json!({"session_id": "s-1", "last_assistant_message": text}), t, "ci");
         let f = home.join(".fleet/relay/done-ci.json");
         serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_answer_to_messages_at_the_end_of_a_turn_keeps_the_one_before() {
+        let home = std::env::temp_dir().join(format!("fleet-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
+        let say = |text: &str, more: bool| note_in(&home,
+            &json!({"session_id": "s-1", "last_assistant_message": text, "stop_hook_active": more}), 1, "ci");
+        let answer = || std::fs::read_to_string(home.join(".fleet/relay/answer-ci.txt")).unwrap();
+        say("First.", false);
+        // The bus hook hands over messages as the turn ends, and marks it.
+        std::fs::create_dir_all(home.join(".fleet/keep")).unwrap();
+        std::fs::write(home.join(".fleet/keep/s-1"), "").unwrap();
+        say("Second.", true);
+        assert_eq!(answer(), format!("Second.\n{}\nFirst.", EARLIER));
+        // The style hook sends the second back: the rewrite replaces it alone.
+        say("Second, shorter.", true);
+        assert_eq!(answer(), format!("Second, shorter.\n{}\nFirst.", EARLIER));
+        // A rewrite with no answer kept is the newest alone.
+        say("Third.", false);
+        say("Third, shorter.", true);
+        assert_eq!(answer(), "Third, shorter.");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
