@@ -13,6 +13,8 @@ When a check fails, or works again, checkup writes two files to the fleet
 relay (~/fleet-relay, or $CHECKUP_OUT): server-<host>.json with every
 check, and done-server-<host>.json, an event of kind "alert" that the
 phone app rings for. While nothing changes it writes nothing there.
+When every check fails because no name resolves, the network is down
+(a VPN dead after sleep, say), so checkup writes nothing at all.
 
 Each run also adds one line to ~/.checkup.log (or $CHECKUP_LOG) for the
 graphs of a dashboard: the time, then per check "name=value=why", tab
@@ -38,6 +40,7 @@ LOG = Path(os.environ.get("CHECKUP_LOG", Path.home() / ".checkup.log"))
 LOG_MAX = 16_000_000  # bytes; past this the older half goes
 HOST = socket.gethostname()
 WAIT = 20  # seconds a site may take to answer
+NO_DNS = ("[Errno -3]", "[Errno -5]")  # no answer from the name server
 
 
 # Each kind returns what is wrong ("" when it works), and a number to graph.
@@ -149,6 +152,8 @@ def main() -> None:
     except OSError:
         return
     now, value = run(lines)
+    if now and all(any(e in why for e in NO_DNS) for why in now.values()):
+        return  # no name resolves: the network is down, not the checks
     t = int(time.time())
     log(t, now, value)
     view = OUT / f"server-{HOST}.json"

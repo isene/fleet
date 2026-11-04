@@ -343,6 +343,9 @@ phone app sees by itself when the relay host is gone. When checkup on the
 relay host writes no log line for 20 minutes, `fleet-mcp.py` sends the
 phone an alert, and one more when the lines come again.
 
+When every check fails because no name resolves, the network is down
+(a VPN dead after sleep, say), so checkup writes nothing at all.
+
 Each run also adds one line to `~/.checkup.log` for a dashboard's
 graphs: the time, then `name=value=why` per check, tab apart. The value
 is the page's answer time in ms, the disk's percent, the certificate's

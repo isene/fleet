@@ -88,6 +88,25 @@ def test_only_a_change_rings(tmp_path, monkeypatch):
     assert json.loads(event.read_text())["line"] == "box: ghost works again"
 
 
+def test_no_name_resolves_so_nothing_rings(tmp_path, monkeypatch):
+    rc = tmp_path / ".checkup"
+    rc.write_text("url site https://example.org/ x\ncert site-tls example.org 14\n")
+    monkeypatch.setattr(cu, "LIST", rc)
+    monkeypatch.setattr(cu, "OUT", tmp_path)
+    monkeypatch.setattr(cu, "LOG", tmp_path / "log")
+    monkeypatch.setattr(cu, "HOST", "box")
+    why = {
+        "site": "<urlopen error [Errno -3] Temporary failure in name resolution>",
+        "site-tls": "[Errno -5] No address associated with hostname",
+    }
+    monkeypatch.setattr(cu, "run", lambda lines: (why, {}))
+    cu.main()
+    assert list(tmp_path.iterdir()) == [rc], "a dead network writes nothing"
+    why["site-tls"] = "3 days left"
+    cu.main()
+    assert "site-tls: 3 days left" in (tmp_path / "done-server-box.json").read_text()
+
+
 def test_each_run_adds_a_line_and_the_log_stays_small(tmp_path, monkeypatch):
     log = tmp_path / "log"
     monkeypatch.setattr(cu, "LOG", log)
