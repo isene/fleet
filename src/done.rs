@@ -59,7 +59,8 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     let mark = home.join(".fleet/eta").join(&id);
     let mut kind = "turn";
     let mut eta = String::new();
-    if let Some(line) = eta_line(text) {
+    let clock = crate::local_stamp(now);
+    if let Some(line) = eta_line(text).filter(|l| ahead(l, &clock[11..])) {
         if std::fs::read_to_string(&mark).ok().as_deref() != Some(line.as_str()) {
             // A rename, since fleet reads the marks again only when the
             // folder's mtime moves, and a write in place leaves it alone.
@@ -363,6 +364,15 @@ fn eta_line(text: &str) -> Option<String> {
         .max_by_key(|(m, _)| *m).map(|(_, l)| plain(l))
 }
 
+/// Whether a line's ETA can still come at `now` ("09:44"). A time after
+/// "ETA" counts even just past, as a run that is late. A time after "about"
+/// or "before" that is not ahead says when something happened: "the last
+/// check, just before 09:43" hung as an ETA (seen 2026-11-04).
+fn ahead(line: &str, now: &str) -> bool {
+    line.split(|c: char| !c.is_alphanumeric()).any(|w| w == "ETA")
+        || eta_clock(line).is_some_and(|c| !late(&c, now) && minutes(&c) != minutes(now))
+}
+
 /// Verbs that give a finish time with "at" and a clock time: "done at 14:20".
 const FINISH: [&str; 8] = ["ends", "end", "finishes", "finish", "done", "ready", "completes", "lands"];
 
@@ -501,6 +511,15 @@ mod tests {
         assert!(!late("16:05", "15:40"));
         assert!(!late("15:40", "15:40"));
         assert!(!late("?", "15:40"));
+    }
+
+    #[test]
+    fn a_time_already_past_is_no_eta_unless_it_says_eta() {
+        assert!(!ahead("Last check (just before 09:43): all fine.", "09:43"));
+        assert!(!ahead("Last check (just before 09:43): all fine.", "09:44"));
+        assert!(ahead("The build is done by 10:05.", "09:44"));
+        assert!(ahead("Done by 00:10.", "23:50"));
+        assert!(ahead("ETA about 09:40, the run is late.", "09:44"));
     }
 
     #[test]
