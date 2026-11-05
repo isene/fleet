@@ -95,6 +95,10 @@ work on Linux only.
   glass runs deck, which paints the session's colour in its own pane. A session on a gateway model
   (`cck`: Kimi through OpenRouter) starts deck through `cck deck`, so it
   stays on that model
+- `+` start a new session in deck: type its tag, then its folder (`~/`
+  to start). deck writes the bookmark, so the session signs with its tag
+  from the first turn. It opens on the workspace in front; `w` and `b`
+  set where and in what colour it opens next time
 - `m` on a session: type a message, Enter drops it on the bus
 - `y` on a session: copy its session id to the clipboard, to hand another
   Claude session so it can read what happened there

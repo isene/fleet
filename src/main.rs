@@ -976,6 +976,21 @@ fn main() {
                     }
                 }
             }
+            Some("+") => {
+                // A new session in deck, under a tag of its own, in the
+                // folder named. It opens on the workspace in front.
+                let mut p = Pane::new(1, rows, cols, 1, 231, 236);
+                if let Some(tag) = p.ask_or_cancel(" tag for the new session: ", "") {
+                    let tag = tag.trim().trim_start_matches('#').to_string();
+                    flash = match new_tag_problem(&tag, !sessions::tag_owners(&tag).is_empty()) {
+                        Some(why) => why,
+                        None => match p.ask_or_cancel(&format!(" folder for {}: ", tag), "~/") {
+                            Some(dir) => new_session(&tag, &dir),
+                            None => String::new(),
+                        },
+                    };
+                }
+            }
             Some("c") => {
                 rollup_rows = Some(rollup::today(&sessions::load_tags()));
             }
@@ -1553,6 +1568,43 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     }
 }
 
+/// Why `tag` cannot name a new session, or None when it can.
+fn new_tag_problem(tag: &str, taken: bool) -> Option<String> {
+    if tag.is_empty() {
+        Some(String::new())
+    } else if tag.contains(char::is_whitespace) {
+        Some("a tag is one word".into())
+    } else if taken {
+        Some(format!("a session has the tag {} already", tag))
+    } else {
+        None
+    }
+}
+
+/// Start a new session in deck under `tag`, in `dir` (~ is home). deck
+/// writes the bookmark, so the session carries the tag from its first turn.
+fn new_session(tag: &str, dir: &str) -> String {
+    let dir = dir.trim();
+    let dir = match dir.strip_prefix('~') {
+        Some(rest) => format!("{}{}", std::env::var("HOME").unwrap_or_default(), rest),
+        None => dir.to_string(),
+    };
+    if !std::path::Path::new(&dir).is_dir() {
+        return format!("no folder {}", dir);
+    }
+    let Some(deck) = which("deck") else { return "deck is not installed".into() };
+    // setsid and no inherited stdin, as in resurrect: the glass outlives fleet.
+    let spawned = Command::new("setsid")
+        .args(["glass", "-e", &deck, "--new", tag])
+        .current_dir(&dir)
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+        .spawn();
+    match spawned {
+        Ok(_) => format!("new session {} in {}", tag, dir),
+        Err(e) => format!("glass failed: {}", e),
+    }
+}
+
 /// The command that opens a session in deck, or None to open it the old
 /// way. A gateway session starts deck through cck, which sets the
 /// gateway's endpoint, key and model for the Claude that deck runs.
@@ -2125,6 +2177,7 @@ fn help() -> Over {
     let mut t = String::new();
     t.push_str(&format!(" {}\n", hdr("SESSIONS")));
     t.push_str(&format!("{}jump to it, or resume it in a new glass\n", key("Enter")));
+    t.push_str(&format!("{}start a new session in deck (tag, folder)\n", key("+")));
     t.push_str(&format!("{}send a message on the bus\n", key("m")));
     t.push_str(&format!("{}park it: listed, uncounted, up top\n", key("p")));
     t.push_str(&format!("{}auto-wake: check messages by itself (»)\n", key("a")));
@@ -2189,7 +2242,7 @@ fn draw_footer(cols: u16, rows: u16, focus: Focus,
         " Esc back".to_string()
     } else {
         match focus {
-            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · m message · p park · k stop · d flag · < purge · c today · v open · / search · ? help".to_string(),
+            Focus::Sessions => " q quit · TAB inbox · ↑↓ · Enter jump/resume · + new · m message · p park · k stop · d flag · < purge · c today · v open · / search · ? help".to_string(),
             Focus::Inbox => " q quit · TAB sessions · ↑↓ · Enter open/wake · d flag file/msg · < delete flagged · M log · / search · ? help".to_string(),
         }
     };
@@ -2268,6 +2321,14 @@ mod dialog_tests {
         assert_eq!(dialog_key(false, true), 0x6e);
         assert_eq!(dialog_key(true, false), 0xff0d);
         assert_eq!(dialog_key(false, false), 0xff1b);
+    }
+
+    #[test]
+    fn a_new_session_needs_one_free_word_for_a_tag() {
+        assert_eq!(new_tag_problem("", false).as_deref(), Some(""));
+        assert_eq!(new_tag_problem("two words", false).as_deref(), Some("a tag is one word"));
+        assert_eq!(new_tag_problem("ci", true).as_deref(), Some("a session has the tag ci already"));
+        assert_eq!(new_tag_problem("ci", false), None);
     }
 
     #[test]
