@@ -93,8 +93,8 @@ work on Linux only.
   or, when it has no window, resume it in a new glass terminal (detached
   through `setsid`, so it outlives fleet). With deck installed, that
   glass runs deck, which paints the session's colour in its own pane. A session on a gateway model
-  (`cck`: Kimi through OpenRouter) is resumed through `cck`, so it stays
-  on that model
+  (`cck`: Kimi through OpenRouter) starts deck through `cck deck`, so it
+  stays on that model
 - `m` on a session: type a message, Enter drops it on the bus
 - `y` on a session: copy its session id to the clipboard, to hand another
   Claude session so it can read what happened there

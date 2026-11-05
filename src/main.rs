@@ -1495,10 +1495,11 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
     let gateway = s.model.contains('/');
     // deck, when it is installed, shows the session in panes and paints
     // the session's colour in its answer pane, so glass keeps its usual
-    // background and deck names the window. deck runs Claude Code only,
-    // so a gateway session opens the old way.
-    if let Some(bin) = which("deck").filter(|_| !gateway) {
-        c.args(["-e", bin.as_str(), if owns_tag { s.tag.as_str() } else { s.id.as_str() }]);
+    // background and deck names the window.
+    let name = if owns_tag { s.tag.as_str() } else { s.id.as_str() };
+    let cck = if gateway { which("cck") } else { None };
+    if let Some(args) = deck_command(which("deck"), cck, gateway, name) {
+        c.arg("-e").args(args);
     } else {
         // Per-session background: glass reads GLASS_BG and overrides .glassrc.
         if let Some(bg) = pref.and_then(|p| p.bg.as_ref()) {
@@ -1550,6 +1551,17 @@ fn resurrect(wm: Option<&WinMap>, s: &Session, pref: Option<&config::SessionPref
         }
         Err(e) => format!("glass failed: {}", e),
     }
+}
+
+/// The command that opens a session in deck, or None to open it the old
+/// way. A gateway session starts deck through cck, which sets the
+/// gateway's endpoint, key and model for the Claude that deck runs.
+fn deck_command(deck: Option<String>, cck: Option<String>, gateway: bool, name: &str) -> Option<Vec<String>> {
+    let deck = deck?;
+    if !gateway {
+        return Some(vec![deck, name.into()]);
+    }
+    Some(vec![cck?, "deck".into(), name.into()])
 }
 
 /// The title a session's window carries: the one set with t, else #tag
@@ -2256,6 +2268,16 @@ mod dialog_tests {
         assert_eq!(dialog_key(false, true), 0x6e);
         assert_eq!(dialog_key(true, false), 0xff0d);
         assert_eq!(dialog_key(false, false), 0xff1b);
+    }
+
+    #[test]
+    fn a_gateway_session_opens_in_deck_through_cck() {
+        let v = |a: &[&str]| Some(a.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+        let some = |x: &str| Some(x.to_string());
+        assert_eq!(deck_command(some("deck"), None, false, "fe2o3"), v(&["deck", "fe2o3"]));
+        assert_eq!(deck_command(some("deck"), some("cck"), true, "fw-kimi"), v(&["cck", "deck", "fw-kimi"]));
+        assert_eq!(deck_command(some("deck"), None, true, "fw-kimi"), None);
+        assert_eq!(deck_command(None, some("cck"), true, "fw-kimi"), None);
     }
 }
 
