@@ -775,6 +775,7 @@ fn main() {
                         }
                         if let Some(id) = p.file_stem() {
                             open::forget(&id.to_string_lossy());
+                            sessions::drop_bookmark(&id.to_string_lossy());
                         }
                         let side = p.with_extension(""); // subagent sidecar dir
                         if side.is_dir() {

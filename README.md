@@ -152,7 +152,8 @@ work on Linux only.
   itself, so this is for one nothing will collect: a wrong tag, a
   session that is gone, or something you handled another way
 - `d` flag for deletion (dark-red row, advances): inbox items, and
-  idle/off sessions (transcript plus its subagent sidecar)
+  idle/off sessions (transcript, its subagent sidecar and its bookmark,
+  so its tag is free for a new session)
 - `<` delete everything flagged
 - `M` popup with the full bus message log (pending messages show as
   dim rows in the INBOX pane)

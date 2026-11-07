@@ -679,6 +679,26 @@ pub fn tag_owners(tag: &str) -> Vec<String> {
     out
 }
 
+/// Drop a deleted session's bookmark, so its tags are free for a new one.
+pub fn drop_bookmark(id: &str) {
+    drop_bookmark_in(&home().join(".cc-sessions/bookmarks.json"), id);
+}
+
+fn drop_bookmark_in(path: &Path, id: &str) {
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Ok(mut v) = serde_json::from_str::<Value>(&text) else { return };
+    if v["sessions"].as_object_mut().and_then(|m| m.remove(id)).is_none() {
+        return;
+    }
+    // A new file renamed over the old, so a reader never sees half of it.
+    let tmp = path.with_extension("json.tmp");
+    if let Ok(t) = serde_json::to_string_pretty(&v) {
+        if std::fs::write(&tmp, t + "\n").is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
 pub fn load_tags() -> HashMap<String, String> {
     let mut out = HashMap::new();
     let path = home().join(".cc-sessions/bookmarks.json");
@@ -743,6 +763,18 @@ mod tests {
         let info = read_tail(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         info.last == 'a' && !info.turn_open
+    }
+
+    #[test]
+    fn a_deleted_session_frees_its_tag() {
+        let path = std::env::temp_dir().join(format!("fleet-test-{}-bookmarks.json", std::process::id()));
+        std::fs::write(&path, r#"{"sessions":{"a":{"path":"/x","tags":["fw"]},"b":{"path":"/y","tags":["sys"]}},"version":2}"#).unwrap();
+        drop_bookmark_in(&path, "a");
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(v["sessions"].get("a").is_none());
+        assert_eq!(v["sessions"]["b"]["tags"][0], "sys");
+        assert_eq!(v["version"], 2);
     }
 
     #[test]
