@@ -320,6 +320,12 @@ list while its screen is open; a tap on a session shows its answer,
 with a Yes and a No for each open item, and a long press sends that
 session a message.
 
+The same answer says whether the laptop is online, as Syncthing on the
+relay host sees it (`laptop`), and where each message from the phone
+is (`queue`): still on the server, or on the laptop. The bus hook
+deletes a message as it hands it to the session, so one that leaves the
+queue was picked up. The phone shows that under the session.
+
 The phone app's open `?done=` request can also carry `&phone=N`, the
 number of messages for the phone it knows of. The server then answers
 early when that number changes, with the number and the newest

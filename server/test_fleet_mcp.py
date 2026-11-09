@@ -16,12 +16,20 @@ def no_checkup_log(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "CHECKUP_LOG", tmp_path / "no.log")
 
 
+@pytest.fixture(autouse=True)
+def no_syncthing(monkeypatch):
+    """Nor may this machine's own Syncthing."""
+    monkeypatch.setattr(fm, "st", lambda path, method="GET": None)
+    monkeypatch.setattr(fm, "LAPTOP", [])
+
+
 def test_a_tag_keeps_its_case(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "BUS", tmp_path)
     monkeypatch.setattr(fm, "poke_syncthing", lambda: None)
-    assert fm.message_session("#DI", "hello").startswith("Delivered to 'DI'")
-    assert [f.parent.name for f in tmp_path.glob("*/*.msg")] == ["DI"]
-    assert fm.message_session("D I", "hello").startswith("Invalid tag")
+    said, name = fm.message_session("#DI", "hello")
+    assert said.startswith("Delivered to 'DI'")
+    assert ["{}/{}".format(f.parent.name, f.name) for f in tmp_path.glob("*/*.msg")] == [name]
+    assert fm.message_session("D I", "hello") == (fm.message_session("D I", "x")[0], None)
 
 
 def test_a_drop_is_a_file_no_session_reads(tmp_path, monkeypatch):
@@ -42,7 +50,7 @@ def test_the_session_list_comes_when_it_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "BUS", tmp_path)
     # No list yet: the first ask gets an empty one at once.
     first = fm.sessions(-1, 0)
-    assert (first["stamp"], first["sessions"]) == (0, [])
+    assert first["sessions"] == [] and first["laptop"] == {"up": None}
     (tmp_path / "sessions.json").write_text('{"t": 5, "sessions": [{"tag": "ci", "state": "YOURS"}], "usage": {"week": 6}}')
     view = fm.sessions(first["stamp"], 0)
     assert view["sessions"][0]["tag"] == "ci" and view["stamp"] > 0
@@ -126,3 +134,41 @@ def test_a_stopped_checkup_rings_once_and_its_return_too(tmp_path, monkeypatch):
     monkeypatch.setattr(fm.time, "time", lambda: back + 5)
     [e] = fm.done_events(2000 + gap)
     assert (e["t"], e["line"]) == (back, "relay: checkup.py runs again")
+
+
+def test_the_list_says_where_each_message_is(tmp_path, monkeypatch):
+    """The phone tells "laptop offline" from "on the laptop, not yet read"
+    from "picked up" by what this host's Syncthing knows."""
+    monkeypatch.setattr(fm, "BUS", tmp_path)
+    monkeypatch.setattr(fm, "poke_syncthing", lambda: None)
+    net = {"up": False, "have": False}
+
+    def st(path, method="GET"):
+        if path == "/rest/system/status":
+            return {"myID": "SERVER"}
+        if path == "/rest/config/folders/fleet-relay":
+            return {"devices": [{"deviceID": "SERVER"}, {"deviceID": "LAPTOP"}]}
+        if path == "/rest/system/connections":
+            return {"connections": {"LAPTOP": {"connected": net["up"]}}}
+        if path == "/rest/stats/device":
+            return {"LAPTOP": {"lastSeen": "2026-11-09T19:01:11.123456789+01:00"}}
+        if path.startswith("/rest/db/file?folder=fleet-relay&file=ci/"):
+            return {"availability": [{"id": "LAPTOP"}]} if net["have"] else None
+        return None
+    monkeypatch.setattr(fm, "st", st)
+    reply = fm.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "message_session", "arguments": {"tag": "ci", "text": "3 yes"}}})
+    name = reply["result"]["_meta"]["name"]
+    # The laptop sleeps: the message waits here.
+    away = fm.sessions(-1, 0)
+    assert away["laptop"] == {"up": False, "seen": 1794247271}
+    assert [(q["name"], q["on"]) for q in away["queue"]] == [(name, "server")]
+    # It wakes and takes the file: the wait ends, with the new place.
+    net.update(up=True, have=True)
+    there = fm.sessions(away["stamp"], 0)
+    assert there["laptop"] == {"up": True} and there["queue"][0]["on"] == "laptop"
+    # The bus hook hands it to the session and deletes it.
+    (tmp_path / name).unlink()
+    read = fm.sessions(there["stamp"], 0)
+    assert read["queue"] == [] and read["stamp"] != there["stamp"]
+    assert fm.sessions(read["stamp"], 0) == {"stamp": read["stamp"]}

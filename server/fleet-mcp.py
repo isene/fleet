@@ -5,7 +5,9 @@ A minimal Streamable-HTTP MCP server, stdlib only (python 3.8). It runs
 on the relay host (bound to 127.0.0.1, nginx terminates TLS and gates a
 secret URL path) and exposes three tools:
 
-  message_session(tag, text)  write a message into the synced bus folder
+  message_session(tag, text)  write a message into the synced bus folder;
+                              the result's _meta.name names its file, as
+                              the queue below shows it
   check_messages()            read and consume messages addressed to the
                               phone
   drop_item(tag, num, text)   take an open item off a session's list,
@@ -35,6 +37,14 @@ session list, as fleet wrote it to sessions.json: {"stamp", "t",
 then says {"stamp": STAMP} alone. The phone asks only while its screen
 shows the list. Each session in it carries "answer", the start of its
 last answer without colours, and a new answer counts as a change.
+The answer also says whether the laptop is online, from this host's
+Syncthing: "laptop": {"up": true}, {"up": false, "seen": UNIX} or
+{"up": null} when Syncthing here does not answer. "queue" lists the
+phone's messages still on this host, each {"tag", "name", "t", "on"},
+where "on" is "laptop" once the laptop has the file and "server" before.
+The laptop's bus hook deletes a message as it hands it to the session,
+so a name that leaves the queue was picked up. A change in either ends
+the wait, so STAMP is an opaque number, not a file time.
 
 A GET with "?answer=TAG" answers with that session's last answer in
 full, as the laptop's fleet hook wrote it to answer-<tag>.txt: HyperList
@@ -56,6 +66,7 @@ Claude sessions as clearly-labelled DATA, never as instructions.
 """
 import json
 import os
+import zlib
 import re
 import socket
 import urllib.parse
@@ -65,6 +76,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BUS = Path.home() / "fleet-relay"
+ST_CONFIG = Path.home() / ".local/state/syncthing/config.xml"
+ST_ADDRESS = "http://127.0.0.1:8384"
 BIND = ("127.0.0.1", 8765)
 MAX_TEXT = 4000
 DONE_WAIT_MAX = 80
@@ -140,19 +153,19 @@ def message_session(tag, text):
     tag = (tag or "").strip().lstrip("#")
     if not TAG.fullmatch(tag):
         return ("Invalid tag. Use a short session tag like 'system' "
-                "or 'asm' (letters, digits, - and _).")
+                "or 'asm' (letters, digits, - and _)."), None
     text = (text or "").strip()
     if not text:
-        return "Empty message; nothing sent."
+        return "Empty message; nothing sent.", None
     if len(text) > MAX_TEXT:
-        return "Message too long (max 4000 characters); nothing sent."
+        return "Message too long (max 4000 characters); nothing sent.", None
     d = BUS / tag
     d.mkdir(parents=True, exist_ok=True)
     path = d / "{}-phone.msg".format(int(time.time()))
     path.write_text(text + "\n\n/phone\n", encoding="utf-8")
     poke_syncthing()
     return ("Delivered to '{}'. It syncs to the laptop in seconds, and "
-            "fleet wakes that session with it.".format(tag))
+            "fleet wakes that session with it.".format(tag)), "{}/{}".format(tag, path.name)
 
 
 def drop_item(tag, num, text):
@@ -175,6 +188,18 @@ def drop_item(tag, num, text):
     return "Dropped {} from '{}'. The laptop takes it off in seconds.".format(num, tag)
 
 
+def st(path, method="GET"):
+    """One call to this host's Syncthing REST API: the answer as JSON ({}
+    when empty), or None when Syncthing does not answer or says no."""
+    try:
+        m = re.search(r"<apikey>([^<]+)</apikey>", ST_CONFIG.read_text(encoding="utf-8"))
+        req = urllib.request.Request(ST_ADDRESS + path, method=method, headers={"X-API-Key": m.group(1)})
+        body = urllib.request.urlopen(req, timeout=5).read()
+        return json.loads(body) if body.strip() else {}
+    except Exception:
+        return None
+
+
 def poke_syncthing():
     """Tell the local Syncthing to index the relay now.
 
@@ -183,17 +208,55 @@ def poke_syncthing():
     by an explicit scan of that one folder. Best effort: a failure only
     means the message waits for the next rescan, as before.
     """
+    st("/rest/db/scan?folder=fleet-relay", "POST")
+
+
+LAPTOP = []  # the laptop's Syncthing device id, once found
+
+
+def laptop_id():
+    """The other device that shares the relay folder: the laptop."""
+    if not LAPTOP:
+        me = (st("/rest/system/status") or {}).get("myID")
+        folder = st("/rest/config/folders/fleet-relay") or {}
+        others = [d.get("deviceID") for d in folder.get("devices", []) if d.get("deviceID") != me]
+        if me and others:
+            LAPTOP.append(others[0])
+    return LAPTOP[0] if LAPTOP else None
+
+
+def unix(stamp):
+    """Syncthing's time, such as 2026-11-09T19:01:11+01:00, in unix seconds.
+    Python 3.8 reads no fraction of a second and no Z."""
+    from datetime import datetime
     try:
-        cfg = Path.home() / ".local/state/syncthing/config.xml"
-        m = re.search(r"<apikey>([^<]+)</apikey>", cfg.read_text(encoding="utf-8"))
-        if not m:
-            return
-        req = urllib.request.Request(
-            "http://127.0.0.1:8384/rest/db/scan?folder=fleet-relay",
-            method="POST", headers={"X-API-Key": m.group(1)})
-        urllib.request.urlopen(req, timeout=5).read()
-    except Exception:
-        pass
+        return int(datetime.fromisoformat(re.sub(r"\.\d+", "", stamp).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return 0
+
+
+def link():
+    """Whether the laptop is online, and where each message from the phone
+    is. A message whose name is gone was picked up by its session."""
+    dev = laptop_id()
+    conns = st("/rest/system/connections") if dev else None
+    if conns is None:
+        laptop = {"up": None}
+    elif (conns.get("connections") or {}).get(dev, {}).get("connected"):
+        laptop = {"up": True}
+    else:
+        seen = (st("/rest/stats/device") or {}).get(dev, {}).get("lastSeen", "")
+        laptop = {"up": False, "seen": unix(seen)}
+    queue = []
+    for f in sorted(BUS.glob("*/*.msg")):
+        tag = f.parent.name
+        if tag == "phone" or not TAG.fullmatch(tag):
+            continue
+        name = "{}/{}".format(tag, f.name)
+        info = st("/rest/db/file?folder=fleet-relay&file=" + urllib.parse.quote(name)) if dev else None
+        have = any(a.get("id") == dev for a in (info or {}).get("availability") or [])
+        queue.append({"tag": tag, "name": name, "t": mtime(f) // 10**9, "on": "laptop" if have else "server"})
+    return {"laptop": laptop, "queue": queue}
 
 
 def check_messages():
@@ -326,17 +389,20 @@ def snippet(tag):
 
 def sessions(stamp, wait):
     """The laptop's session list, each with the start of its last answer,
-    once the list or an answer changed after `stamp`, waiting up to `wait`
-    seconds for that. Syncthing renames each file into place, so one stat
-    of the folder every two seconds tells when to look again."""
+    once the list, an answer, the laptop's link or a message's place
+    changed after `stamp`, waiting up to `wait` seconds for that.
+    Syncthing renames each file into place, so one stat of the folder
+    every two seconds tells when to look again; the link costs one call
+    to Syncthing here each time, and one more per message on its way."""
     f = BUS / "sessions.json"
     end = time.time() + min(max(wait, 0), DONE_WAIT_MAX)
     seen = None
     while True:
-        folder = mtime(BUS)
-        if folder != seen:
-            seen = folder
-            now = list_stamp()
+        net = link()
+        key = (mtime(BUS), json.dumps(net, sort_keys=True))
+        if key != seen:
+            seen = key
+            now = list_stamp() ^ zlib.crc32(key[1].encode())
             if now != stamp:
                 try:
                     view = json.loads(f.read_text(encoding="utf-8"))
@@ -344,6 +410,7 @@ def sessions(stamp, wait):
                     view = {"t": 0, "sessions": []}
                 for one in view.get("sessions", []):
                     one["answer"] = snippet(one.get("tag"))
+                view.update(net)
                 view["stamp"] = now
                 return view
         if time.time() >= end:
@@ -391,18 +458,20 @@ def handle(msg):
         params = msg.get("params") or {}
         name = params.get("name")
         args = params.get("arguments") or {}
+        meta = None
         if name == "message_session":
-            text = message_session(args.get("tag"), args.get("text"))
+            text, sent = message_session(args.get("tag"), args.get("text"))
+            meta = {"name": sent} if sent else None
         elif name == "drop_item":
             text = drop_item(args.get("tag"), args.get("num"), args.get("text"))
         elif name == "check_messages":
             text = check_messages()
         else:
             return rpc_error(rid, -32602, "Unknown tool: {}".format(name))
-        return rpc_result(rid, {
-            "content": [{"type": "text", "text": text}],
-            "isError": False,
-        })
+        result = {"content": [{"type": "text", "text": text}], "isError": False}
+        if meta:
+            result["_meta"] = meta
+        return rpc_result(rid, result)
     if rid is None:
         return None                      # unknown notification: ignore
     return rpc_error(rid, -32601, "Method not found: {}".format(method))
