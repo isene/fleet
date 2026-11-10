@@ -316,7 +316,9 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             id: id.clone(),
             tag: tag.clone(),
             tagged: true,
-            path: PathBuf::new(),
+            // No file is there; the name carries the id, which < needs
+            // to drop the bookmark.
+            path: projects.join("new").join(format!("{id}.jsonl")),
             cwd: bookmark_path(id),
             state: if pid.is_some() { State::Yours } else { State::Off },
             age_secs: 0,
