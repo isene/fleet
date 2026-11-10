@@ -182,6 +182,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
         cache.ask_at = ask_at;
     }
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let projects = home().join(".claude/projects");
     let dirs = match std::fs::read_dir(&projects) {
         Ok(d) => d,
@@ -213,6 +214,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             // Beyond the recent window only BOOKMARKED sessions stay,
             // listed as "older": the curated list without the uncurated
             // old strays.
+            seen.insert(id.clone());
             let recent = age <= cfg.recent_days * 86400;
             if !recent && !tags.contains_key(&id) {
                 continue;
@@ -305,8 +307,40 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             });
         }
     }
+    // A session started under a tag and not yet given a prompt has a
+    // bookmark and no transcript. It is listed all the same, so its tag
+    // is seen to be taken and Enter opens it.
+    for (id, tag) in tags.iter().filter(|(id, _)| !seen.contains(*id)) {
+        let pid = procs.get(id).copied();
+        out.push(Session {
+            id: id.clone(),
+            tag: tag.clone(),
+            tagged: true,
+            path: PathBuf::new(),
+            cwd: bookmark_path(id),
+            state: if pid.is_some() { State::Yours } else { State::Off },
+            age_secs: 0,
+            model: String::new(),
+            prompt: "(new, no prompt yet)".into(),
+            pid,
+            ws: None,
+            ctx_k: None,
+            at_prompt: pid.is_some(),
+            moves: Vec::new(),
+            eta: String::new(),
+            ask: None,
+        });
+    }
     out.sort_by_key(|s| (s.state.rank(), s.age_secs));
     out
+}
+
+/// The folder a bookmark names for its session.
+fn bookmark_path(id: &str) -> String {
+    std::fs::read_to_string(home().join(".cc-sessions/bookmarks.json")).ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["sessions"][id]["path"].as_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 fn cached_tail(cache: &mut Cache, path: &Path, mtime: SystemTime) -> TailInfo {
