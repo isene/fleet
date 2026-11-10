@@ -432,6 +432,11 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                     info.ctx_k = Some(total / 1000);
                 }
             }
+        } else if typ == "system" && info.model.is_empty() && picked_model(&v).is_some() {
+            // /model after the last answer: the pick is the model in use,
+            // though no answer carries its name yet.
+            info.model = short_model(picked_model(&v).unwrap_or_default());
+            local |= info.last == '\0';
         } else if typ == "system" && info.last == '\0'
             && v["subtype"].as_str() == Some("local_command")
         {
@@ -554,6 +559,15 @@ pub fn stray(path: &Path, tags: &HashMap<String, String>) -> Option<Session> {
 /// for one question at a time, never for a list.
 pub fn pid_of(id: &str) -> Option<u32> {
     claude_procs().get(id).copied()
+}
+
+/// The model id of a "/model <id>" line the client ran itself.
+fn picked_model(v: &Value) -> Option<&str> {
+    let run = &v["commandRun"];
+    (run["command"].as_str() == Some("model"))
+        .then(|| run["args"].as_str())
+        .flatten()
+        .filter(|m| m.starts_with("claude-"))
 }
 
 /// "claude-fable-5-1[1m]" → "Fable 5.1", "claude-haiku-4-5-20251001" → "Haiku 4.5".
@@ -790,6 +804,18 @@ mod tests {
         let info = read_tail(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         info.last == 'a' && !info.turn_open
+    }
+
+    #[test]
+    fn a_model_picked_after_the_last_answer_is_the_model_shown() {
+        let done = text("done", "end_turn");
+        let out = r#"{"type":"system","subtype":"local_command","commandRun":{"command":"model","args":"claude-fable-5-2"}}"#;
+        let path = std::env::temp_dir().join(format!("fleet-test-{}-picked.jsonl", std::process::id()));
+        std::fs::write(&path, [PROMPT, &done, out].join("\n")).unwrap();
+        let info = read_tail(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(info.model, "Fable 5.2");
+        assert!(info.last == 'a' && !info.turn_open);
     }
 
     #[test]
