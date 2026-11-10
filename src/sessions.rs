@@ -338,6 +338,7 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
     // seen is sdk-cli and not one is cli, decided after the whole tail.
     let mut saw_sdk = false;
     let mut saw_cli = false;
+    let mut local = false;
     for line in lines.iter().rev() {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -431,6 +432,13 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
                     info.ctx_k = Some(total / 1000);
                 }
             }
+        } else if typ == "system" && info.last == '\0'
+            && v["subtype"].as_str() == Some("local_command")
+        {
+            // A command the client ran itself (/model, /effort): its
+            // lines follow the last answer, and no turn starts.
+            local = true;
+        } else if typ == "user" && local && info.last == '\0' && local_command(&v) {
         } else if typ == "user" {
             if info.last == '\0' {
                 info.last = 'u';
@@ -449,6 +457,14 @@ fn read_tail(path: &Path) -> Option<TailInfo> {
     }
     info.headless = saw_sdk && !saw_cli;
     Some(info)
+}
+
+/// The lines a local command leaves in the transcript: the note to the
+/// model, and the command itself.
+fn local_command(v: &Value) -> bool {
+    v["isMeta"].as_bool() == Some(true)
+        || v["message"]["content"].as_str()
+            .is_some_and(|c| c.starts_with("<command-name>") || c.starts_with("<local-command"))
 }
 
 /// A real user prompt: string content, or a text block in the array.
@@ -732,6 +748,17 @@ mod tests {
         assert!(!hidden(true, true, false));
         assert!(!hidden(true, false, true));
         assert!(!hidden(false, false, false));
+    }
+
+    #[test]
+    fn a_model_change_after_an_answer_leaves_the_session_at_its_prompt() {
+        let done = text("done", "end_turn");
+        let note = r#"{"type":"user","isMeta":true,"message":{"content":"<local-command-caveat>ran directly</local-command-caveat>"}}"#;
+        let cmd = r#"{"type":"user","message":{"content":"<command-name>/model</command-name>"}}"#;
+        let out = r#"{"type":"system","subtype":"local_command","content":"<local-command-stdout>Set model</local-command-stdout>"}"#;
+        assert!(at_prompt("model", &[PROMPT, &done, note, cmd, out]));
+        // A skill started with a slash has no local_command line: a turn runs.
+        assert!(!at_prompt("skill", &[PROMPT, &done, cmd]));
     }
 
     #[test]
