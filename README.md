@@ -109,6 +109,8 @@ work on Linux only.
   current colour. Saved to `~/.fleetrc`. deck paints it in its answer
   pane; a session resumed without deck gets it as its glass background
   (the `GLASS_BG` env)
+- `f` on a session: set the folder it starts in. A session that runs
+  takes the new folder at its next start.
 - `t` on a session: set its window title, `#tag` when left empty. An open
   window is renamed at once. A resumed one starts with the title, and
   Claude Code is told to keep it (`CLAUDE_CODE_DISABLE_TERMINAL_TITLE`)

@@ -904,6 +904,21 @@ fn main() {
                     }
                 }
             }
+            Some("f") if focus == Focus::Sessions => {
+                // The folder the session starts in, read at its next start.
+                if let Some(s) = sess.get(sel_s) {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let now = sessions::bookmark_path(&s.id);
+                    let init = match now.strip_prefix(&home) {
+                        Some(rest) if !home.is_empty() => format!("~{}", rest),
+                        _ => now,
+                    };
+                    let mut p = Pane::new(1, rows, cols, 1, 231, 236);
+                    if let Some(dir) = p.ask_or_cancel(&format!(" start folder for {}: ", s.tag), &init) {
+                        flash = set_folder(s, &dir);
+                    }
+                }
+            }
             Some("t") if focus == Focus::Sessions => {
                 // The window title, prefilled with what it carries now.
                 // Empty goes back to #tag. A live window is renamed at once.
@@ -1582,6 +1597,24 @@ fn new_tag_problem(tag: &str, taken: bool) -> Option<String> {
     }
 }
 
+/// Point a session's bookmark at `dir` (~ is home). Claude Code finds a
+/// session by its id from any folder, so the transcript stays where it is.
+fn set_folder(s: &Session, dir: &str) -> String {
+    let dir = dir.trim().trim_end_matches('/');
+    let dir = match dir.strip_prefix('~') {
+        Some(rest) => format!("{}{}", std::env::var("HOME").unwrap_or_default(), rest),
+        None => dir.to_string(),
+    };
+    if !std::path::Path::new(&dir).is_dir() {
+        return format!("no folder {}", dir);
+    }
+    if !sessions::set_folder(&s.id, &dir) {
+        return format!("{} has no tag yet; a tagged session keeps its folder", s.tag);
+    }
+    let when = if s.pid.is_some() { ", from its next start" } else { "" };
+    format!("{} starts in {}{}", s.tag, dir, when)
+}
+
 /// Start a new session in deck under `tag`, in `dir` (~ is home). deck
 /// writes the bookmark, so the session carries the tag from its first turn.
 fn new_session(tag: &str, dir: &str) -> String {
@@ -2186,6 +2219,7 @@ fn help() -> Over {
     t.push_str(&format!("{}copy its session id to the clipboard\n", key("y")));
     t.push_str(&format!("{}set the workspace it opens on\n", key("w")));
     t.push_str(&format!("{}pick its colour: deck's pane, else glass (prism)\n", key("b")));
+    t.push_str(&format!("{}set the folder it starts in\n", key("f")));
     t.push_str(&format!("{}set its window title (default #tag)\n", key("t")));
     t.push_str(&format!("{}stop the session: off (K forces)\n", key("k")));
     t.push_str(&format!("{}flag an idle/off session for deletion\n", key("d")));

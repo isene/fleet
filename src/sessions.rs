@@ -338,7 +338,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
 }
 
 /// The folder a bookmark names for its session.
-fn bookmark_path(id: &str) -> String {
+pub fn bookmark_path(id: &str) -> String {
     std::fs::read_to_string(home().join(".cc-sessions/bookmarks.json")).ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| v["sessions"][id]["path"].as_str().map(str::to_string))
@@ -765,6 +765,24 @@ fn drop_bookmark_in(path: &Path, id: &str) {
     }
 }
 
+/// Set the folder a bookmarked session starts in. False when the
+/// session has no bookmark.
+pub fn set_folder(id: &str, dir: &str) -> bool {
+    set_folder_in(&home().join(".cc-sessions/bookmarks.json"), id, dir)
+}
+
+fn set_folder_in(path: &Path, id: &str, dir: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else { return false };
+    let Ok(mut v) = serde_json::from_str::<Value>(&text) else { return false };
+    if !v["sessions"][id].is_object() {
+        return false;
+    }
+    v["sessions"][id]["path"] = Value::String(dir.to_string());
+    let tmp = path.with_extension("json.tmp");
+    let Ok(t) = serde_json::to_string_pretty(&v) else { return false };
+    std::fs::write(&tmp, t + "\n").is_ok() && std::fs::rename(&tmp, path).is_ok()
+}
+
 pub fn load_tags() -> HashMap<String, String> {
     let mut out = HashMap::new();
     let path = home().join(".cc-sessions/bookmarks.json");
@@ -852,6 +870,19 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(info.model, "Fable 5.2");
         assert!(info.last == 'a' && !info.turn_open);
+    }
+
+    #[test]
+    fn a_new_folder_is_written_to_the_bookmark_only() {
+        let path = std::env::temp_dir().join(format!("fleet-test-{}-folder.json", std::process::id()));
+        std::fs::write(&path, r#"{"sessions":{"a":{"path":"/x","tags":["fw"]}},"version":2}"#).unwrap();
+        assert!(set_folder_in(&path, "a", "/new"));
+        assert!(!set_folder_in(&path, "b", "/new"), "no bookmark, nothing to set");
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(v["sessions"]["a"]["path"], "/new");
+        assert_eq!(v["sessions"]["a"]["tags"][0], "fw");
+        assert!(v["sessions"].get("b").is_none());
     }
 
     #[test]
