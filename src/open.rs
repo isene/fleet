@@ -43,6 +43,12 @@ fn file(id: &str) -> PathBuf {
     dir().join(safe)
 }
 
+/// Where a session's list is kept as it was before the turn's first
+/// answer. Outside the folder fleet lists, so it is never read as a session.
+fn before(id: &str) -> PathBuf {
+    home().join(".fleet/before").join(file(id).file_name().unwrap_or_default())
+}
+
 /// One open item, as fleet lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Open {
@@ -192,8 +198,26 @@ impl Ledger {
     }
 
     fn read(id: &str) -> Ledger {
+        std::fs::read_to_string(file(id)).map(|t| Ledger::parse(&t)).unwrap_or_else(|_| Ledger::new())
+    }
+
+    /// The list as it was before the first answer to prompt `prompt`, if
+    /// that answer changed it.
+    fn before(id: &str, prompt: &str) -> Option<Ledger> {
+        let text = std::fs::read_to_string(before(id)).ok()?;
+        let (of, rest) = text.split_once('\n')?;
+        (of == prompt).then(|| Ledger::parse(rest))
+    }
+
+    /// Keep the list as it is now, for a rewrite of the answer to `prompt`.
+    fn keep(&self, id: &str, prompt: &str) {
+        let path = before(id);
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new("/")));
+        let _ = std::fs::write(path, format!("{prompt}\n{}", self.text()));
+    }
+
+    fn parse(text: &str) -> Ledger {
         let mut l = Ledger::new();
-        let Ok(text) = std::fs::read_to_string(file(id)) else { return l };
         let mut lines = text.lines();
         let head: Vec<&str> = lines.next().unwrap_or("").split('\t').collect();
         // A file from before v0.3.48 starts with two numbers that are no longer used.
@@ -224,14 +248,19 @@ impl Ledger {
         (1..).find(|n| !skip.contains(n) && !self.items.iter().any(|i| i.num == *n)).unwrap_or(0)
     }
 
-    /// Write the file whole, through a temp file, so a reader never sees
-    /// half of it and the folder's mtime tells fleet to read again.
-    fn write(&self, id: &str) {
+    fn text(&self) -> String {
         let answered: Vec<String> = self.answered.iter().map(|n| n.to_string()).collect();
         let mut out = format!("{}\t{}\t{}\n", self.turn, self.prompt, answered.join(","));
         for i in &self.items {
             out.push_str(&format!("{}\t{}\t{}\t{}\n", i.num, i.turn, i.at, i.text));
         }
+        out
+    }
+
+    /// Write the file whole, through a temp file, so a reader never sees
+    /// half of it and the folder's mtime tells fleet to read again.
+    fn write(&self, id: &str) {
+        let out = self.text();
         let path = file(id);
         let tmp = path.with_extension("tmp");
         let _ = std::fs::create_dir_all(dir());
@@ -357,6 +386,7 @@ fn take_drops(d: &Path) -> Vec<(String, u32, String)> {
 /// A session's transcript is gone, and its list goes with it.
 pub fn forget(id: &str) {
     let _ = std::fs::remove_file(file(id));
+    let _ = std::fs::remove_file(before(id));
 }
 
 /// The hook, at two moments. At a prompt of the user it hides the items
@@ -381,17 +411,40 @@ pub fn hook(input: &str, now: u64) -> Option<String> {
         return None;
     }
     let said = said(v["last_assistant_message"].as_str()?);
+    let prompt = v["prompt_id"].as_str().unwrap_or("");
+    let again = v["stop_hook_active"].as_bool().unwrap_or(false);
     let mut l = Ledger::read(id);
-    let hidden = !l.answered.is_empty();
+    let mut changed = !l.answered.is_empty();
     l.answered.clear();
+    // An answer written again after a hook replaces the one sent back:
+    // only the last version counts, so it is read onto the list as it
+    // was before the first. Else a question of the first version that
+    // the rewrite numbers anew stays, and shows twice.
+    let mut sent_back: Vec<Item> = Vec::new();
+    let first = match Ledger::before(id, prompt).filter(|_| again && !prompt.is_empty()) {
+        Some(b) => {
+            sent_back = std::mem::replace(&mut l, b).items;
+            changed = true;
+            true
+        }
+        None => !again,
+    };
     if said.items.is_empty() && said.closed.is_empty() && said.faults.is_empty() {
-        if hidden {
+        if changed {
             l.write(id);
         }
         return None;
     }
-    let again = v["stop_hook_active"].as_bool().unwrap_or(false);
-    let faults = l.apply(&said, v["prompt_id"].as_str().unwrap_or(""), again, now);
+    if !again && !prompt.is_empty() {
+        l.keep(id, prompt);
+    }
+    let faults = l.apply(&said, prompt, !first, now);
+    // A question the first version asked too is as old as that version.
+    for i in l.items.iter_mut().filter(|i| i.at == now) {
+        if let Some(old) = sent_back.iter().find(|o| subject(&o.text) == subject(&i.text)) {
+            i.at = old.at;
+        }
+    }
     l.write(id);
     if faults.is_empty() || again {
         return None;
@@ -557,6 +610,32 @@ mod tests {
         says("3 y", "p4");
         says("And one more thing.", "p5");
         assert_eq!(listed(), vec![1, 3]);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_rewritten_answer_counts_once() {
+        let (_lock, home) = crate::config::test_home("rewrite");
+        let id = "test-rewrite";
+        let event = |text: &str, prompt: &str, again: bool| serde_json::json!({
+            "hook_event_name": "Stop", "session_id": id, "prompt_id": prompt,
+            "stop_hook_active": again, "last_assistant_message": text}).to_string();
+        let listed = || load(id, true).iter().map(|i| (i.num, i.text.clone())).collect::<Vec<_>>();
+        hook(&event("1. Your move: run a\n2. Your move: run b\n3. Your move: run c", "p1", false), 100);
+        // The first version closes 2 and 3 and uses their numbers again: sent back.
+        let first = "Closed: 2, 3\n1. Your move: run a\n2. Your move: read d\n3. Your move: read e";
+        assert!(hook(&event(first, "p2", false), 100).is_some());
+        // The rewrite numbers the same two questions anew. Each is listed once.
+        let second = "Closed: 2, 3\n1. Your move: run a\n4. Your move: read d\n5. Your move: read e";
+        assert_eq!(hook(&event(second, "p2", true), 100), None);
+        assert_eq!(listed(), vec![(1, "run a".to_string()), (4, "read d".to_string()), (5, "read e".to_string())]);
+        // A rewrite that closes nothing after all brings back what the first version closed.
+        hook(&event("Closed: 4, 5", "p3", false), 100);
+        assert_eq!(hook(&event("Done, nothing to close.", "p3", true), 100), None);
+        assert_eq!(listed().len(), 3);
+        // An answer to another prompt is never read onto an old list.
+        hook(&event("Closed: 4", "p4", true), 100);
+        assert_eq!(listed().iter().map(|i| i.0).collect::<Vec<_>>(), vec![1, 5]);
         let _ = std::fs::remove_dir_all(home);
     }
 
