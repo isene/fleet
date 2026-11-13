@@ -89,7 +89,8 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     // this turn must keep. When all of them would be too long, the newest
     // goes alone.
     let path = relay.join(format!("answer-{}.txt", tag));
-    let earlier = kept(home, &id, &path, v["stop_hook_active"].as_bool().unwrap_or(false));
+    let earlier = kept(home, &id, &path, v["stop_hook_active"].as_bool().unwrap_or(false),
+        v["prompt_id"].as_str().unwrap_or(""));
     let new = hyperlist(home, text);
     let whole = if earlier.is_empty() || earlier.chars().count() + new.chars().count() > 60_000 {
         new
@@ -107,20 +108,35 @@ const NEXT: &str = "\x1b[38;5;240m── the next answer ──\x1b[0m";
 
 /// The answers of this turn that stay below the new one. A new turn keeps
 /// none. A turn the bus hook marked keeps all that `path` shows now; a
-/// rewrite keeps what the turn kept before it.
-fn kept(home: &Path, id: &str, path: &Path, more: bool) -> String {
+/// rewrite keeps what the turn kept before it. An answer can be sent back
+/// and get messages at the same stop: the next one is then its rewrite
+/// too, so the mark counts for nothing and the draft goes.
+fn kept(home: &Path, id: &str, path: &Path, more: bool, prompt: &str) -> String {
     let file = home.join(".fleet/kept").join(id);
     if !more {
         let _ = std::fs::remove_file(&file);
         return String::new();
     }
-    if std::fs::remove_file(home.join(".fleet/keep").join(id)).is_ok() {
+    let back = home.join(".fleet/back").join(id);
+    let rewrite = std::fs::read_to_string(&back).is_ok_and(|p| p.trim() == prompt);
+    let _ = std::fs::remove_file(&back);
+    let marked = std::fs::remove_file(home.join(".fleet/keep").join(id)).is_ok();
+    if marked && !rewrite {
         let now = std::fs::read_to_string(path).unwrap_or_default();
         let _ = std::fs::create_dir_all(home.join(".fleet/kept"));
         let _ = std::fs::write(&file, &now);
         return now;
     }
     std::fs::read_to_string(&file).unwrap_or_default()
+}
+
+/// Marks an answer as sent back for a rewrite, with the turn it is in.
+/// The style hook writes the same mark.
+pub fn sent_back(v: &Value) {
+    let Some(id) = v["session_id"].as_str() else { return };
+    let dir = crate::config::home().join(".fleet/back");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(safe(id)), v["prompt_id"].as_str().unwrap_or(""));
 }
 
 /// A permission dialog that waits: the event the phone rings for.
@@ -501,6 +517,31 @@ mod tests {
         say("Third.", false);
         say("Third, shorter.", true);
         assert_eq!(answer(), "Third, shorter.");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_draft_sent_back_as_messages_arrive_is_not_kept() {
+        let home = std::env::temp_dir().join(format!("fleet-back-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        for d in ["relay", "keep", "back"] {
+            std::fs::create_dir_all(home.join(".fleet").join(d)).unwrap();
+        }
+        let say = |text: &str, more: bool, prompt: &str| note_in(&home, &json!({"session_id": "s-1",
+            "last_assistant_message": text, "stop_hook_active": more, "prompt_id": prompt}), 1, "ci");
+        let answer = || std::fs::read_to_string(home.join(".fleet/relay/answer-ci.txt")).unwrap();
+        say("Draft.", false, "p1");
+        // One stop: a hook sends the draft back, and the bus hook hands over a message.
+        std::fs::write(home.join(".fleet/keep/s-1"), "").unwrap();
+        std::fs::write(home.join(".fleet/back/s-1"), "p1").unwrap();
+        say("Rewritten.", true, "p1");
+        assert_eq!(answer(), "Rewritten.");
+        // A mark left from another turn counts for nothing.
+        say("First.", false, "p2");
+        std::fs::write(home.join(".fleet/keep/s-1"), "").unwrap();
+        std::fs::write(home.join(".fleet/back/s-1"), "p1").unwrap();
+        say("Second.", true, "p2");
+        assert_eq!(answer(), format!("First.\n{}\nSecond.", NEXT));
         let _ = std::fs::remove_dir_all(&home);
     }
 

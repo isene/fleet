@@ -153,6 +153,11 @@ fn main() {
             }
         }
         if let Some(out) = open::hook(&input, now) {
+            if out.contains("\"decision\":\"block\"") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+                    done::sent_back(&v);
+                }
+            }
             println!("{}", out);
         }
         return;
