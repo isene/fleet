@@ -345,6 +345,23 @@ pub fn bookmark_path(id: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The tags a bookmark gives its session, joined by commas; empty without one.
+/// A rename changes the bookmark at once, while CC_RESUME_TAGS keeps the name
+/// the session started with.
+pub fn bookmark_tags(id: &str) -> String {
+    bookmark_tags_in(&home().join(".cc-sessions/bookmarks.json"), id)
+}
+
+fn bookmark_tags_in(path: &Path, id: &str) -> String {
+    std::fs::read_to_string(path).ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| {
+            v["sessions"][id]["tags"].as_array()
+                .map(|a| a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(","))
+        })
+        .unwrap_or_default()
+}
+
 fn cached_tail(cache: &mut Cache, path: &Path, mtime: SystemTime) -> TailInfo {
     if let Some((t, info)) = cache.tails.get(path) {
         if *t == mtime {
@@ -883,6 +900,16 @@ mod tests {
         assert_eq!(v["sessions"]["a"]["path"], "/new");
         assert_eq!(v["sessions"]["a"]["tags"][0], "fw");
         assert!(v["sessions"].get("b").is_none());
+    }
+
+    #[test]
+    fn a_renamed_session_files_its_answer_under_the_new_tag() {
+        let path = std::env::temp_dir().join(format!("fleet-test-{}-tags.json", std::process::id()));
+        std::fs::write(&path, r#"{"sessions":{"a":{"path":"/x","tags":["web","old"]}},"version":2}"#).unwrap();
+        let (a, b) = (bookmark_tags_in(&path, "a"), bookmark_tags_in(&path, "b"));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(a, "web,old");
+        assert_eq!(b, "", "no bookmark, no tags");
     }
 
     #[test]

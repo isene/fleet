@@ -48,7 +48,15 @@ const RUNNING: [&str; 7] = [
 ];
 
 pub fn note(v: &Value, now: u64) {
-    note_in(&crate::config::home(), v, now, &std::env::var("CC_RESUME_TAGS").unwrap_or_default());
+    note_in(&crate::config::home(), v, now, &tags_now(v));
+}
+
+/// The session's tags as its bookmark has them now. CC_RESUME_TAGS keeps the
+/// name the session started with, so after a rename the answers went to a file
+/// under the old name while the phone asked for the new one.
+fn tags_now(v: &Value) -> String {
+    let tags = crate::sessions::bookmark_tags(v["session_id"].as_str().unwrap_or(""));
+    if tags.is_empty() { std::env::var("CC_RESUME_TAGS").unwrap_or_default() } else { tags }
 }
 
 fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
@@ -141,7 +149,7 @@ pub fn sent_back(v: &Value) {
 
 /// A permission dialog that waits: the event the phone rings for.
 pub fn ask(v: &Value, now: u64) {
-    ask_in(&crate::config::home(), v, now, &std::env::var("CC_RESUME_TAGS").unwrap_or_default());
+    ask_in(&crate::config::home(), v, now, &tags_now(v));
 }
 
 fn ask_in(home: &Path, v: &Value, now: u64, tags: &str) {

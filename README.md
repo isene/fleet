@@ -271,7 +271,8 @@ each. A prompt or an answer that changes nothing touches no file.
 
 With a relay folder (`~/.fleet/relay`, a Syncthing folder shared with the
 host that runs `server/fleet-mcp.py`), the same hook writes
-`done-<tag>.json` there at the end of every answer: the session's tag,
+`done-<tag>.json` there (the tag as the bookmark has it now, so a renamed
+session answers under its new name) at the end of every answer: the session's tag,
 the time, the answer's first line, and its kind. Beside it goes
 `answer-<tag>.txt`, the whole answer: HyperList as your screen shows it,
 colours included, when the
