@@ -22,6 +22,10 @@
 //! below a dim line. A rewrite the style hook asks for replaces only the
 //! newest answer.
 //!
+//! A new turn first moves the last turn's answer to the top of
+//! answer-<tag>.log, which keeps the ten newest, for the phone's Earlier
+//! button.
+//!
 //! A permission dialog that stays up a few seconds fires Claude Code's
 //! Notification hook. It goes out as kind "ask", with the tool and what it
 //! wants to run, so the phone rings for a session that waits on you. The
@@ -30,7 +34,8 @@
 //! waiting, the mark also holds that call in full, for the phone's
 //! confirm: a long or many-line command shows whole before Allow.
 //!
-//! Battery: two small file writes per finished answer, never on a timer,
+//! Battery: two small file writes per finished answer, and one of up to
+//! 60 kB at the first answer of a turn; never on a timer,
 //! and no event without a relay folder. The files lie beside the tag
 //! folders, not in one, so the fleet-bus Stop hook's `relay/*/*` loop
 //! never sees it.
@@ -97,8 +102,13 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
     // this turn must keep. When all of them would be too long, the newest
     // goes alone.
     let path = relay.join(format!("answer-{}.txt", tag));
-    let earlier = kept(home, &id, &path, v["stop_hook_active"].as_bool().unwrap_or(false),
-        v["prompt_id"].as_str().unwrap_or(""));
+    let more = v["stop_hook_active"].as_bool().unwrap_or(false);
+    // A new turn: the last turn's answer goes to the top of the log that
+    // the phone's Earlier button shows.
+    if !more {
+        to_log(&relay, &tag, &path);
+    }
+    let earlier = kept(home, &id, &path, more, v["prompt_id"].as_str().unwrap_or(""));
     let new = hyperlist(home, text);
     let whole = if earlier.is_empty() || earlier.chars().count() + new.chars().count() > 60_000 {
         new
@@ -113,6 +123,45 @@ fn note_in(home: &Path, v: &Value, now: u64, tags: &str) {
 
 /// The line between an answer and the next one, dim on the phone.
 const NEXT: &str = "\x1b[38;5;240m── the next answer ──\x1b[0m";
+
+/// The start of the dim line above each answer in answer-<tag>.log.
+const HEAD: &str = "\x1b[38;5;240m── answer of ";
+
+/// How many earlier answers answer-<tag>.log keeps.
+const EARLIER: usize = 10;
+
+/// Puts the answer in `answer` at the top of answer-<tag>.log, below a dim
+/// line with its time. The log keeps the newest EARLIER answers, in at
+/// most 60,000 characters; the newest alone may be longer and is cut.
+fn to_log(relay: &Path, tag: &str, answer: &Path) {
+    let Ok(old) = std::fs::read_to_string(answer) else { return };
+    let t = answer.metadata().and_then(|m| m.modified()).ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    let log = relay.join(format!("answer-{}.log", tag));
+    let before = std::fs::read_to_string(&log).unwrap_or_default();
+    let mut all = cut(&format!("{}{} ──\x1b[0m\n{}\n", HEAD, crate::local_stamp(t), old.trim_end()), 60_000);
+    let mut size = all.chars().count();
+    for one in entries(&before).into_iter().take(EARLIER - 1) {
+        size += one.chars().count();
+        if size > 60_000 {
+            break;
+        }
+        all.push_str(one);
+    }
+    let tmp = relay.join(format!(".answer-{}.log.tmp", tag));
+    if std::fs::write(&tmp, all).is_ok() {
+        let _ = std::fs::rename(&tmp, &log);
+    }
+}
+
+/// The answers in a log, each with its dim line, newest first.
+fn entries(log: &str) -> Vec<&str> {
+    let mut at: Vec<usize> = log.match_indices(HEAD).map(|(i, _)| i)
+        .filter(|&i| i == 0 || log.as_bytes()[i - 1] == b'\n').collect();
+    at.push(log.len());
+    at.windows(2).map(|w| &log[w[0]..w[1]]).collect()
+}
 
 /// The answers of this turn that stay below the new one. A new turn keeps
 /// none. A turn the bus hook marked keeps all that `path` shows now; a
@@ -550,6 +599,32 @@ mod tests {
         std::fs::write(home.join(".fleet/back/s-1"), "p1").unwrap();
         say("Second.", true, "p2");
         assert_eq!(answer(), format!("First.\n{}\nSecond.", NEXT));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_new_turn_moves_the_last_answer_to_the_log() {
+        let home = std::env::temp_dir().join(format!("fleet-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".fleet/relay")).unwrap();
+        let say = |text: &str, more: bool| note_in(&home,
+            &json!({"session_id": "s-1", "last_assistant_message": text, "stop_hook_active": more}), 1, "ci");
+        let log = || std::fs::read_to_string(home.join(".fleet/relay/answer-ci.log")).unwrap_or_default();
+        say("One.", false);
+        assert_eq!(log(), "");
+        // A rewrite is the same turn: the draft never reaches the log.
+        say("One, shorter.", true);
+        assert_eq!(log(), "");
+        say("Two.", false);
+        assert_eq!(entries(&log()).len(), 1);
+        assert!(log().starts_with(HEAD) && log().ends_with("\nOne, shorter.\n"));
+        for n in 3..15 {
+            say(&format!("Answer {}.", n), false);
+        }
+        let all = log();
+        let kept = entries(&all);
+        assert_eq!(kept.len(), EARLIER);
+        assert!(kept[0].ends_with("\nAnswer 13.\n") && kept[9].ends_with("\nAnswer 4.\n"));
         let _ = std::fs::remove_dir_all(&home);
     }
 

@@ -281,7 +281,8 @@ at `~/.claude/hooks/hyperlist-display-asm`, else the markdown as written.
 
 When the bus hook hands a session messages as its turn ends, the
 session answers again. The phone then shows both: the first answer at
-the top, and the new one below a dim line.
+the top, and the new one below a dim line. A new turn moves the last
+turn's answer to `answer-<tag>.log`, which keeps the ten newest.
 
 - An answer that gives an ETA ("ETA about 14:20", "ETA unknown", or a
   clock time after "about", "by" or "until", as in "finish at about
@@ -318,9 +319,11 @@ and context size alone write nothing. A GET with
 `?sessions=STAMP&wait=SECS` answers with the list once the file's time
 differs from STAMP, or a new answer came. Each session in it carries
 `answer`, the start of its last answer without colours. A GET with
-`?answer=TAG` answers with the whole answer. The phone app shows the
+`?answer=TAG` answers with the whole answer, and `?earlier=TAG` with the
+log of the ten before it. The phone app shows the
 list while its screen is open; a tap on a session shows its answer,
-with a Yes and a No for each open item, and a long press sends that
+with a Yes and a No for each open item and an Earlier button for the
+log, and a long press sends that
 session a message.
 
 The same answer says whether the laptop is online, as Syncthing on the

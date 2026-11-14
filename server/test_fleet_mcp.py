@@ -103,6 +103,14 @@ def test_the_answer_comes_over_http(tmp_path, monkeypatch):
     try:
         got = json.load(urllib.request.urlopen(base + "?answer=ci"))
         assert (got["tag"], got["text"]) == ("ci", "Done.\n")
+        (tmp_path / "answer-ci.log").write_text("Before.\n")
+        got = json.load(urllib.request.urlopen(base + "?earlier=ci"))
+        assert (got["tag"], got["text"]) == ("ci", "Before.\n")
+        try:
+            urllib.request.urlopen(base + "?earlier=..%2Fx")
+            assert False, "a tag that leaves the folder: 404"
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
         try:
             urllib.request.urlopen(base + "?answer=DI")
             assert False, "no answer kept: 404"

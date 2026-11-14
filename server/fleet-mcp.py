@@ -49,6 +49,8 @@ the wait, so STAMP is an opaque number, not a file time.
 A GET with "?answer=TAG" answers with that session's last answer in
 full, as the laptop's fleet hook wrote it to answer-<tag>.txt: HyperList
 with its terminal colours. {"tag", "t", "text"}, or 404 when none is kept.
+"?earlier=TAG" answers the same way with answer-<tag>.log: the session's
+ten answers before that, newest first, each below a dim line with its time.
 
 Transport: ~/fleet-relay/ is a small dedicated Syncthing folder shared
 with the laptop (as ~/.fleet/relay), so a written file lands in seconds.
@@ -366,8 +368,8 @@ def done(since, wait, phone=None):
         time.sleep(2)
 
 
-def answer_file(tag):
-    return BUS / "answer-{}.txt".format(tag)
+def answer_file(tag, ext="txt"):
+    return BUS / "answer-{}.{}".format(tag, ext)
 
 
 def list_stamp():
@@ -418,11 +420,12 @@ def sessions(stamp, wait):
         time.sleep(2)
 
 
-def answer(tag):
-    """A session's last answer in full, as the laptop shows it, or None."""
+def answer(tag, ext="txt"):
+    """A session's last answer in full, as the laptop shows it, or with
+    ext "log" the answers before it; None when none is kept."""
     if not TAG.fullmatch(tag or ""):
         return None
-    f = answer_file(tag)
+    f = answer_file(tag, ext)
     try:
         return {"tag": tag, "t": int(f.stat().st_mtime), "text": f.read_text(encoding="utf-8")}
     except OSError:
@@ -538,9 +541,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, sessions(stamp, wait))
             return
-        if query.startswith("answer="):
-            tag = urllib.parse.parse_qs(query).get("answer", [""])[0]
-            view = answer(tag)
+        if query.startswith(("answer=", "earlier=")):
+            key = query.split("=", 1)[0]
+            tag = urllib.parse.parse_qs(query).get(key, [""])[0]
+            view = answer(tag, "txt" if key == "answer" else "log")
             self._send(200 if view else 404, view)
             return
         if query != "waiting":
