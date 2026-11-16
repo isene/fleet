@@ -403,6 +403,7 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
             st => st.label(),
         };
         json!({"tag": s.tag, "auto": auto.contains(&s.tag), "state": state,
+               "waits": s.state == crate::sessions::State::Waits,
                "eta": s.eta, "ws": s.ws.map(|w| w + 1), "model": s.model,
                "prompt": cut(&s.prompt, 200), "moves": moves,
                "ask": s.ask.as_ref().map(|(call, line)| json!({"call": call, "line": line,
