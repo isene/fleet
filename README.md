@@ -56,9 +56,9 @@ that at a glance, in one TUI.
 - A clock time in the State column (`13:55`) is a session's ETA: the
   time it gave for work still running. It shows while the session works,
   and while it waits at its prompt for a build or a run of its own, where
-  it would else say `YOURS` or `idle` with nothing asked of you. `YOURS`
-  stays when the answer also asks you something. The time turns red once
-  it has passed. While a turn runs it is the latest one said in that
+  it would else say `YOURS` or `idle`. The time is green when nothing is
+  asked of you, bold orange (the colour of `YOURS`) when the session has
+  an open item for you as well, and red once it has passed. While a turn runs it is the latest one said in that
   turn; after it, the latest one its last answer gave
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt

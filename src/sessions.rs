@@ -54,16 +54,17 @@ impl State {
 }
 
 /// A session at its prompt with an open ETA waits on its own background
-/// work: the row shows the clock time, not YOURS or idle. YOURS stays
-/// when the answer also asks the user something. An idle session shows
-/// the time for six hours, red once it has passed; "?" and a time older
-/// than that are left-overs of work that ended unsaid.
-fn waits(state: State, at_prompt: bool, eta: &str, asked: bool, age: u64) -> State {
+/// work: the row shows the clock time, not YOURS or idle. Whether it also
+/// asks the user something is told by the colour of that time, so a row
+/// with a standing open item shows its time at once. An idle session
+/// shows the time for six hours; "?" and a time older than that are
+/// left-overs of work that ended unsaid.
+fn waits(state: State, at_prompt: bool, eta: &str, age: u64) -> State {
     if eta.is_empty() || !at_prompt {
         return state;
     }
     match state {
-        State::Yours if !asked => State::Waits,
+        State::Yours => State::Waits,
         State::Idle if eta != "?" && age < 6 * 3600 => State::Waits,
         _ => state,
     }
@@ -96,6 +97,14 @@ pub struct Session {
     /// The permission dialog it waits on, as the hook marked it: the call
     /// asked about (empty when more than one waits) and what it runs.
     pub ask: Option<(String, String)>,
+}
+
+impl Session {
+    /// The user has a move here: the row says YOURS, or it shows the time
+    /// of work of its own and has an open item as well.
+    pub fn yours(&self) -> bool {
+        self.state == State::Yours || (self.state == State::Waits && !self.moves.is_empty())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -298,7 +307,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             } else {
                 eta
             };
-            let state = waits(state, at_prompt, &eta, !moves.is_empty(), age);
+            let state = waits(state, at_prompt, &eta, age);
             // The hook's mark, while the session still stops at that call.
             let ask = if state == State::Yours && info.last == 't' {
                 cache.ask.entry(id.clone()).or_insert_with(|| crate::done::ask_mark(&id)).clone()
@@ -968,16 +977,15 @@ mod tests {
     #[test]
     fn a_session_waiting_on_its_own_work_is_not_the_users() {
         use State::*;
-        let w = |state, at_prompt, eta, asked, age| waits(state, at_prompt, eta, asked, age) == Waits;
-        assert!(w(Yours, true, "13:55", false, 60));
-        assert!(w(Yours, true, "?", false, 60));
-        assert!(!w(Yours, true, "13:55", true, 60), "a question makes it YOURS");
-        assert!(!w(Yours, true, "", false, 60));
-        assert!(!w(Yours, false, "13:55", false, 60), "a permission dialog is YOURS");
-        assert!(w(Idle, true, "13:55", true, 2400));
-        assert!(!w(Idle, true, "?", false, 2400));
-        assert!(!w(Idle, true, "13:55", false, 7 * 3600), "a left-over");
-        assert!(!w(Working, true, "13:55", false, 60));
-        assert!(!w(Parked, true, "13:55", false, 60));
+        let w = |state, at_prompt, eta, age| waits(state, at_prompt, eta, age) == Waits;
+        assert!(w(Yours, true, "13:55", 60));
+        assert!(w(Yours, true, "?", 60));
+        assert!(!w(Yours, true, "", 60));
+        assert!(!w(Yours, false, "13:55", 60), "a permission dialog is YOURS");
+        assert!(w(Idle, true, "13:55", 2400));
+        assert!(!w(Idle, true, "?", 2400));
+        assert!(!w(Idle, true, "13:55", 7 * 3600), "a left-over");
+        assert!(!w(Working, true, "13:55", 60));
+        assert!(!w(Parked, true, "13:55", 60));
     }
 }
