@@ -61,10 +61,23 @@ fn fmt_age(s: u64) -> String {
     }
 }
 
+/// What the STATE column says, and whether it is a time already past. A
+/// session with an open ETA that is not the user's shows that clock time
+/// alone ("13:55"): at work, or waiting at its prompt for work of its own.
+fn state_cell(state: State, eta: &str, now: &str) -> (String, bool) {
+    let timed = matches!(state, State::Working | State::Waits) && eta.contains(':');
+    match (timed, state) {
+        (true, _) => (eta.to_string(), done::late(eta, now)),
+        // "ETA unknown": work goes on, with no time to show.
+        (false, State::Waits) => (State::Working.label().to_string(), false),
+        _ => (state.label().to_string(), false),
+    }
+}
+
 fn state_color(s: State) -> u8 {
     match s {
         State::Capped => 196,
-        State::Working => 46,
+        State::Working | State::Waits => 46,
         State::Yours => 208,
         State::Idle => 69,    // alive but quiet: blue, never one of the greys
         State::Off => 60,
@@ -1118,7 +1131,7 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) 
     // Darker than the column-header bars (236), so the two read apart.
     let mut pane = Pane::new(1, 1, cols, 1, 255, 234);
     let yours = sess.iter().filter(|s| s.state == State::Yours).count();
-    let working = sess.iter().filter(|s| s.state == State::Working).count();
+    let working = sess.iter().filter(|s| matches!(s.state, State::Working | State::Waits)).count();
     let mut line = format!(" {}  ", style::bold("fleet"));
     line.push_str(&style::styled(&format!("{} YOURS", yours), Some(208), None, "b"));
     let moves: usize = sess.iter().map(|s| s.moves.len()).sum();
@@ -1229,32 +1242,31 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
     // Two spare cells keep the tags clear of the state.
     let tag_w = sess.iter().take(take).map(|s| visible_len(&s.tag)).max().unwrap_or(0).clamp(7, TAG_W) + 2;
     let hdr = format!(
-        " {:<w$}  {:<7}  {:>6}  {:>2}  {:>5}  {:>5}  {:<9}  {}",
-        "SESSION", "STATE", "AGE", "WS", "ETA", "CTX", "MODEL", "LAST PROMPT", w = tag_w
+        " {:<w$}  {:<7}  {:>6}  {:>2}  {:>5}  {:<9}  {}",
+        "SESSION", "STATE", "AGE", "WS", "CTX", "MODEL", "LAST PROMPT", w = tag_w
     );
     let mut out = header_bar(&hdr, cols);
     // An ETA already past shows red: the work ran late, or its session
     // never said it ended.
     let now = local_stamp(now_secs());
     for (i, s) in sess.iter().take(take).enumerate() {
-        let width = (cols as usize).saturating_sub(50 + tag_w);
-        let late = done::late(&s.eta, &now[11..]);
+        let width = (cols as usize).saturating_sub(43 + tag_w);
+        let (state, late) = state_cell(s.state, &s.eta, &now[11..]);
         // Colors follow the CC statusline: bookmark tags magenta 13,
         // model bold blue, context green/yellow/red, timestamps gray 242.
         let ctx = s.ctx_k.map(|k| format!("{}k", k)).unwrap_or_else(|| "·".into());
         let line = format!(
-            " {} {}{}  {}  {:>2}  {}  {}  {}  {}",
+            " {} {}{}  {}  {:>2}  {}  {}  {}",
             // Bookmarked tags magenta like the statusline; unbookmarked
             // sessions show their directory name in light gray.
             style::fg(&clip(&s.tag, tag_w), if s.tagged { 13 } else { 250 }),
             // » marks a session fleet wakes by itself (the `a` key).
             if auto.contains(&s.tag) { style::fg("»", 208) } else { " ".into() },
-            style::styled(&format!("{:<7}", s.state.label()),
-                          Some(state_color(s.state)), None,
+            style::styled(&format!("{:<7}", state),
+                          Some(if late { 203 } else { state_color(s.state) }), None,
                           if s.state == State::Yours { "b" } else { "" }),
             style::fg(&format!("{:>6}", fmt_age(s.age_secs)), 242),
             s.ws.map(|w| (w + 1).to_string()).unwrap_or_else(|| "·".into()),
-            style::fg(&format!("{:>5}", s.eta), if late { 203 } else { 220 }),
             style::fg(&format!("{:>5}", ctx),
                       s.ctx_k.map(|k| ctx_color(k, window_k)).unwrap_or(242)),
             style::styled(&format!("{:<9}", clip(&s.model, 9)), Some(33), None, "b"),
@@ -2549,5 +2561,16 @@ mod found_tests {
         let s = local_stamp(1790848800);
         assert_eq!(s.len(), 16, "{s}");
         assert!(s.starts_with("2026-10-01 "), "{s}");
+    }
+
+    #[test]
+    fn the_state_column_shows_an_open_eta_as_its_clock_time() {
+        let cell = |st, eta| state_cell(st, eta, "13:50");
+        assert_eq!(cell(State::Waits, "13:55"), ("13:55".into(), false));
+        assert_eq!(cell(State::Working, "13:45"), ("13:45".into(), true));
+        assert_eq!(cell(State::Waits, "?"), ("working".into(), false));
+        assert_eq!(cell(State::Working, ""), ("working".into(), false));
+        assert_eq!(cell(State::Yours, "13:55"), ("YOURS".into(), false));
+        assert_eq!(cell(State::Idle, "13:55"), ("idle".into(), false));
     }
 }

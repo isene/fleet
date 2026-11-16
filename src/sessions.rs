@@ -22,6 +22,7 @@ pub enum State {
     Off,     // no claude process runs this session
     Older,   // bookmarked but beyond the recent window: curated history
     Parked,  // set aside by the user; sorts first, drops when work starts
+    Waits,   // the answer is in, and its own background work runs to an ETA
 }
 
 impl State {
@@ -34,6 +35,7 @@ impl State {
             State::Off => "off",
             State::Older => "older",
             State::Parked => "parked",
+            State::Waits => "waits",
         }
     }
     fn rank(self) -> u8 {
@@ -43,11 +45,27 @@ impl State {
             State::Parked => 0,
             State::Capped => 1,
             State::Yours => 2,
-            State::Working => 3,
+            State::Working | State::Waits => 3,
             State::Idle => 4,
             State::Off => 5,
             State::Older => 6,
         }
+    }
+}
+
+/// A session at its prompt with an open ETA waits on its own background
+/// work: the row shows the clock time, not YOURS or idle. YOURS stays
+/// when the answer also asks the user something. An idle session shows
+/// the time for six hours, red once it has passed; "?" and a time older
+/// than that are left-overs of work that ended unsaid.
+fn waits(state: State, at_prompt: bool, eta: &str, asked: bool, age: u64) -> State {
+    if eta.is_empty() || !at_prompt {
+        return state;
+    }
+    match state {
+        State::Yours if !asked => State::Waits,
+        State::Idle if eta != "?" && age < 6 * 3600 => State::Waits,
+        _ => state,
     }
 }
 
@@ -280,6 +298,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             } else {
                 eta
             };
+            let state = waits(state, at_prompt, &eta, !moves.is_empty(), age);
             // The hook's mark, while the session still stops at that call.
             let ask = if state == State::Yours && info.last == 't' {
                 cache.ask.entry(id.clone()).or_insert_with(|| crate::done::ask_mark(&id)).clone()
@@ -944,5 +963,21 @@ mod tests {
         let idle = r#"{"type":"system","subtype":"informational","content":"Compacted while idle, before the prompt cache expired"}"#;
         assert!(at_prompt("idle", &[summary, idle]));
         assert!(!at_prompt("summary", &[PROMPT, summary]), "a compaction inside a turn");
+    }
+
+    #[test]
+    fn a_session_waiting_on_its_own_work_is_not_the_users() {
+        use State::*;
+        let w = |state, at_prompt, eta, asked, age| waits(state, at_prompt, eta, asked, age) == Waits;
+        assert!(w(Yours, true, "13:55", false, 60));
+        assert!(w(Yours, true, "?", false, 60));
+        assert!(!w(Yours, true, "13:55", true, 60), "a question makes it YOURS");
+        assert!(!w(Yours, true, "", false, 60));
+        assert!(!w(Yours, false, "13:55", false, 60), "a permission dialog is YOURS");
+        assert!(w(Idle, true, "13:55", true, 2400));
+        assert!(!w(Idle, true, "?", false, 2400));
+        assert!(!w(Idle, true, "13:55", false, 7 * 3600), "a left-over");
+        assert!(!w(Working, true, "13:55", false, 60));
+        assert!(!w(Parked, true, "13:55", false, 60));
     }
 }

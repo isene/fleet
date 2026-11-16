@@ -53,11 +53,13 @@ that at a glance, in one TUI.
 - State: `working` (Claude has the turn), `YOURS` (waiting for you),
   `CAPPED` (a usage limit refused the model; needs `/model` or credits),
   `idle`, `off` (no process)
-- ETA: the clock time the session gave for work still running, `?` for
-  "ETA unknown". While a turn runs it is the latest one said in that
-  turn, or else the one the turn before gave until that time passes;
-  after it, the latest one its last answer gave. It turns red once that
-  time has passed
+- A clock time in the State column (`13:55`) is a session's ETA: the
+  time it gave for work still running. It shows while the session works,
+  and while it waits at its prompt for a build or a run of its own, where
+  it would else say `YOURS` or `idle` with nothing asked of you. `YOURS`
+  stays when the answer also asks you something. The time turns red once
+  it has passed. While a turn runs it is the latest one said in that
+  turn; after it, the latest one its last answer gave
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt
 - Sorted so CAPPED and YOURS float to the top

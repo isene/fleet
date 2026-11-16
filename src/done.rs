@@ -395,7 +395,10 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
         let moves: Vec<Value> = s.moves.iter()
             .map(|m| json!({"num": m.num, "text": cut(&m.text, 300)}))
             .collect();
-        json!({"tag": s.tag, "auto": auto.contains(&s.tag), "state": s.state.label(),
+        // The phone app knows no "waits" yet: to it the session works, and
+        // the time is in "eta" as before.
+        let state = if s.state == crate::sessions::State::Waits { "working" } else { s.state.label() };
+        json!({"tag": s.tag, "auto": auto.contains(&s.tag), "state": state,
                "eta": s.eta, "ws": s.ws.map(|w| w + 1), "model": s.model,
                "prompt": cut(&s.prompt, 200), "moves": moves,
                "ask": s.ask.as_ref().map(|(call, line)| json!({"call": call, "line": line,
