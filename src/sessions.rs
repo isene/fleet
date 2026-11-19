@@ -230,10 +230,7 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
                 _ => continue,
             };
             let mtime = md.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            let age = now
-                .duration_since(mtime)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let age = whole_age(now, mtime);
             let id = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
@@ -361,8 +358,28 @@ pub fn scan(cfg: &Config, cache: &mut Cache) -> Vec<Session> {
             ask: None,
         });
     }
-    out.sort_by_key(|s| (s.state.rank(), s.age_secs));
+    order(&mut out);
     out
+}
+
+/// The list's order: by state, then the newest first. A working session
+/// writes its transcript every few seconds, so two of them swapped rows
+/// on each refresh; they go by name instead. Equal ones go by name too.
+pub(crate) fn order(list: &mut [Session]) {
+    let age = |s: &Session| if s.state == State::Working { 0 } else { s.age_secs };
+    list.sort_by(|a, b| {
+        (a.state.rank(), age(a)).cmp(&(b.state.rank(), age(b)))
+            .then_with(|| a.tag.cmp(&b.tag))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
+/// Seconds since `mtime`, from whole seconds of both clock times. Two
+/// sessions that changed 0.5 s apart then stay the same age apart on
+/// every refresh, where rounding the gap made them trade rows.
+fn whole_age(now: SystemTime, mtime: SystemTime) -> u64 {
+    let secs = |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    secs(now).saturating_sub(secs(mtime))
 }
 
 /// The folder a bookmark names for its session.
@@ -854,6 +871,34 @@ pub fn load_tags() -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_close_in_time_keep_their_rows() {
+        use std::time::Duration;
+        let at = |ms: u64| SystemTime::UNIX_EPOCH + Duration::from_millis(ms);
+        // Changed 0.5 s apart: the same gap at every refresh. Rounding
+        // the gap gave 0 at 110.5 and 1 at 110.9, and the rows traded.
+        for now in [110_500, 110_900, 111_200] {
+            assert_eq!(whole_age(at(now), at(100_800)), whole_age(at(now), at(101_300)) + 1);
+        }
+        let one = |tag: &str, state, age_secs| Session {
+            id: tag.into(), tag: tag.into(), cwd: String::new(), path: Default::default(),
+            state, tagged: true, age_secs, model: String::new(), prompt: String::new(),
+            pid: None, ws: None, ctx_k: None, at_prompt: false, moves: Vec::new(),
+            eta: String::new(), ask: None,
+        };
+        let tags = |l: &[Session]| l.iter().map(|s| s.tag.clone()).collect::<Vec<_>>();
+        // Two working sessions keep their order whichever wrote last.
+        for (a, b) in [(1, 3), (3, 1)] {
+            let mut l = vec![one("web", State::Working, a), one("deck", State::Working, b), one("old", State::Yours, 9)];
+            order(&mut l);
+            assert_eq!(tags(&l), ["old", "deck", "web"]);
+        }
+        // Waiting ones go newest first, and equal ones by name.
+        let mut l = vec![one("b", State::Yours, 5), one("c", State::Yours, 2), one("a", State::Yours, 5)];
+        order(&mut l);
+        assert_eq!(tags(&l), ["c", "a", "b"]);
+    }
 
     #[test]
     fn a_deck_session_is_not_hidden_as_a_script_run() {

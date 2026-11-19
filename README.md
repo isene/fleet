@@ -62,7 +62,8 @@ that at a glance, in one TUI.
   turn; after it, the latest one its last answer gave
 - Age of last activity, workspace of its terminal window, context size,
   model, and the last prompt
-- Sorted so CAPPED and YOURS float to the top
+- Sorted so CAPPED and YOURS float to the top. Working sessions stay in
+  name order, so two busy ones do not trade rows while you move to one
 - Bookmarked sessions older than the recent window stay listed at the
   bottom as `older` (dim); unbookmarked old ones are dropped
 
