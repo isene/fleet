@@ -77,8 +77,8 @@ fn state_cell(state: State, eta: &str, now: &str) -> (String, bool) {
 fn state_color(s: State) -> u8 {
     match s {
         State::Capped => 196,
-        State::Working | State::Waits => 46,
-        State::Yours => 208,
+        State::Working | State::Waits => 214, // amber: wait
+        State::Yours => 46,   // green: your turn
         State::Idle => 69,    // alive but quiet: blue, never one of the greys
         State::Off => 60,
         State::Older => 240, // darker than off, but never the bar's 236
@@ -1133,7 +1133,7 @@ fn draw_header(cols: u16, sess: &[Session], items: &[inbox::Item], rates: &str) 
     let yours = sess.iter().filter(|s| s.yours()).count();
     let working = sess.iter().filter(|s| matches!(s.state, State::Working | State::Waits) && !s.yours()).count();
     let mut line = format!(" {}  ", style::bold("fleet"));
-    line.push_str(&style::styled(&format!("{} YOURS", yours), Some(208), None, "b"));
+    line.push_str(&style::styled(&format!("{} YOURS", yours), Some(state_color(State::Yours)), None, "b"));
     let moves: usize = sess.iter().map(|s| s.moves.len()).sum();
     if moves > 0 {
         line.push_str(&format!("  ·  {} open", moves));
@@ -1263,7 +1263,7 @@ fn draw_sessions(cols: u16, y: u16, h: u16, sess: &[Session], focused: bool,
             // » marks a session fleet wakes by itself (the `a` key).
             if auto.contains(&s.tag) { style::fg("»", 208) } else { " ".into() },
             style::styled(&format!("{:<7}", state),
-                          // A time in YOURS's orange: work of its own
+                          // A time in YOURS's green: work of its own
                           // runs, and an item waits for the user too.
                           Some(if late { 203 } else if s.yours() { state_color(State::Yours) } else { state_color(s.state) }), None,
                           if s.yours() { "b" } else { "" }),
