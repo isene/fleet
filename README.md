@@ -244,9 +244,8 @@ is free again from the next answer on, so the numbers stay small: a new
 item takes the lowest one that is not open.
 
 You answer an item by starting a line of your prompt with its number,
-as in `3 y` or `3: the second one`. fleet hides that item at once, while
-the session works. It shows again when the turn ends, unless the answer
-closed it.
+as in `3 y` or `3: the second one`. fleet deletes that item at once. A
+session that still needs it lists it again in its answer.
 
 The phone app's Drop deletes an item too, through the fleet server: a
 file in the relay's `.drop` folder, which fleet reads when it changes.

@@ -393,7 +393,7 @@ fn publish_in(home: &Path, sess: &[crate::sessions::Session], auto: &HashSet<Str
     }
     let rows: Vec<Value> = sess.iter().map(|s| {
         let moves: Vec<Value> = s.moves.iter()
-            .map(|m| json!({"num": m.num, "text": cut(&m.text, 300)}))
+            .map(|m| json!({"num": m.num, "text": cut(&m.text, crate::open::KEEP)}))
             .collect();
         // The phone app knows no "waits" yet: to it the session is the
         // user's or at work, and the time is in "eta" as before.

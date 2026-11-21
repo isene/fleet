@@ -15,9 +15,8 @@
 //! one.
 //!
 //! The same hook reads each prompt of the user. A line that starts with
-//! an open item's number, as in "3 y", answers that item, and fleet hides
-//! it while the session works. At the end of the turn it shows again,
-//! unless the answer closed it.
+//! an open item's number, as in "3 y", answers that item, and fleet
+//! deletes it at once. A session that still needs it lists it again.
 //!
 //! The phone can delete an item too, for one answered on the laptop: the
 //! fleet server writes a file to ~/.fleet/relay/.drop, and fleet deletes
@@ -84,8 +83,12 @@ struct Said {
 }
 
 fn keep(text: &str) -> String {
-    text.replace('\t', " ").chars().take(240).collect()
+    text.replace('\t', " ").chars().take(KEEP).collect()
 }
+
+/// The most of an item's text kept: room for a long `! command` and the
+/// sentence after it, which 240 cut in two.
+pub const KEEP: usize = 600;
 
 fn short(text: &str) -> String {
     text.chars().take(40).collect()
@@ -389,7 +392,7 @@ pub fn forget(id: &str) {
     let _ = std::fs::remove_file(before(id));
 }
 
-/// The hook, at two moments. At a prompt of the user it hides the items
+/// The hook, at two moments. At a prompt of the user it deletes the items
 /// the prompt answers. At the end of an answer it takes the answer in,
 /// shows what was hidden and not closed, and returns the line to print
 /// when the answer has to be written again. It sends an answer back once
@@ -399,10 +402,12 @@ pub fn hook(input: &str, now: u64) -> Option<String> {
     let id = v["session_id"].as_str()?;
     if v["hook_event_name"] == "UserPromptSubmit" {
         let mut l = Ledger::read(id);
-        let mut nums = answers(v["prompt"].as_str()?);
-        nums.retain(|n| l.items.iter().any(|i| i.num == *n));
-        if nums != l.answered {
-            l.answered = nums;
+        let nums = answers(v["prompt"].as_str()?);
+        let had = l.items.len();
+        l.items.retain(|i| !nums.contains(&i.num));
+        // A file from a fleet that hid answered items may still name some.
+        if l.items.len() != had || !l.answered.is_empty() {
+            l.answered.clear();
             l.write(id);
         }
         return None;
@@ -585,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answered_item_is_hidden_until_the_turn_ends() {
+    fn an_answered_item_leaves_the_list_at_once() {
         assert_eq!(answers("1 y\n2nd try failed\n3.5 is the size\n  4: the second\n5.\n6\nSee 7"), vec![1, 4, 5, 6]);
         let (_lock, home) = crate::config::test_home("answer");
         let id = "test-answer".to_string();
@@ -593,23 +598,19 @@ mod tests {
             "hook_event_name": name, "session_id": id, "prompt_id": prompt, key: text}).to_string();
         let stop = |text: &str, prompt: &str| hook(&event("Stop", "last_assistant_message", text, prompt), 100);
         let says = |text: &str, prompt: &str| hook(&event("UserPromptSubmit", "prompt", text, prompt), 100);
-        let listed = || load(&id, false).iter().map(|i| i.num).collect::<Vec<u32>>();
+        let listed = || load(&id, true).iter().map(|i| i.num).collect::<Vec<u32>>();
         stop("Your move 1: run it\nYour move 2: look\nYour move 3: wait", "p1");
         // 1 is answered. 9 is not open, and "2nd" starts a sentence.
         assert_eq!(says("1 y\n2nd try failed\n9 n", "p2"), None);
         assert_eq!(listed(), vec![2, 3]);
-        assert_eq!(load(&id, true).len(), 3, "the session still sees it");
-        // The answer closes nothing, so 1 shows again.
+        // The answer closes nothing, and 1 stays gone.
         stop("Looked at it.", "p2");
-        assert_eq!(listed(), vec![1, 2, 3]);
-        says("Fine.\n2: yes\n3", "p3");
-        assert_eq!(listed(), vec![1]);
-        stop("Closed: 2", "p3");
-        assert_eq!(listed(), vec![1, 3]);
-        // A prompt with no answer in it shows what an unfinished turn left hidden.
-        says("3 y", "p4");
-        says("And one more thing.", "p5");
-        assert_eq!(listed(), vec![1, 3]);
+        assert_eq!(listed(), vec![2, 3]);
+        // A session that still needs an answered item lists it again.
+        says("2: what does it cost?", "p3");
+        assert_eq!(listed(), vec![3]);
+        stop("It costs nothing.\n2. Your move: look", "p3");
+        assert_eq!(listed(), vec![2, 3]);
         let _ = std::fs::remove_dir_all(home);
     }
 
