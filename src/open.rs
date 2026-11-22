@@ -307,7 +307,8 @@ impl Ledger {
                 // changed, or reworded in the rewrite of this turn's answer.
                 Some(i) if i.turn == turn || subject(&i.text) == subject(text) => i.text = text.clone(),
                 Some(i) => {
-                    faults.push(format!("number {} is open as \"{}\"", n, short(&i.text)));
+                    // The whole text, so the session can see what it changed.
+                    faults.push(format!("number {} is open as \"{}\"; repeat that text word for word, or close it", n, i.text));
                     late.push(text);
                 }
                 None if said.closed.contains(&n) => {
@@ -456,7 +457,7 @@ pub fn hook(input: &str, now: u64) -> Option<String> {
     }
     let open: Vec<String> = l.items.iter()
         .filter(|i| i.turn != l.turn)
-        .map(|i| format!("{} ({})", i.num, short(&i.text)))
+        .map(|i| format!("{} ({})", i.num, i.text))
         .collect();
     let reason = format!(
         "fleet lists what you still ask of the user, and this answer does not fit its list: {}. \
@@ -680,6 +681,15 @@ mod tests {
         l.apply(&said("Your move 1: run it"), "p1", false, 100);
         assert!(l.apply(&said("Read one message."), "p1", true, 100).is_empty());
         assert_eq!(open(&l), vec![(1, "run it")]);
+    }
+
+    #[test]
+    fn a_reworded_move_is_sent_back_with_the_whole_open_text() {
+        let mut l = Ledger::new();
+        turns(&mut l, &["2. Your move: play it until it skips, then tell me roughly when it happened."]);
+        let faults = turns(&mut l, &["2. Your move: play it until it skips, then tell me the time."]);
+        assert_eq!(faults.len(), 1);
+        assert!(faults[0].contains("tell me roughly when it happened.\"; repeat that text"), "{}", faults[0]);
     }
 
     #[test]
